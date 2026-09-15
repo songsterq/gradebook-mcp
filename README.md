@@ -69,9 +69,14 @@ GRADEBOOK_PARENTVUE_PASS=...
 ```
 
 ```sh
-docker compose up -d --build
+docker compose -f compose.yaml -f compose.dashboard-only.yaml up -d --build
 curl http://127.0.0.1:3001/healthz        # {"status":"ok"}
 ```
+
+The second file drops the MCP port mapping. Compose merges `ports` by
+appending, so without it the base file still publishes `${PORT:-3000}` — a
+mapping nothing listens on, which fails outright if another service on the host
+already uses that port. It needs Compose v2.24+ for the `!override` tag.
 
 The dashboard is then `http://127.0.0.1:3001/gradebook` and nothing listens on
 the MCP port. The dashboard is **unauthenticated** in every mode, so keep it on

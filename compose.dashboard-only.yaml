@@ -1,0 +1,14 @@
+# Dashboard-only deployment: no MCP endpoint, so no MCP port to publish.
+#
+# Compose merges `ports` by appending, so the base file's MCP mapping cannot be
+# dropped by a plain override -- with a blank PORT it would still publish
+# ${PORT:-3000}, a mapping nothing listens on, which fails outright when
+# something else on the host already uses that port. `!override` replaces the
+# list instead of extending it (Compose v2.24+).
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.dashboard-only.yaml up -d --build
+services:
+  gradebook-mcp:
+    ports: !override
+      - "${UI_BIND_ADDR:-127.0.0.1}:${UI_PORT:-3001}:${UI_PORT:-3001}"
