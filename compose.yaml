@@ -1,0 +1,27 @@
+services:
+  gradebook-mcp:
+    build: .
+    container_name: gradebook-mcp
+    restart: unless-stopped
+    env_file: .env
+    environment: [DATA_DIR=/data]
+    # A new named volume inherits /data's image ownership, so the Dockerfile
+    # chown lets the node user write here on first creation.
+    volumes: [gradebook-data:/data]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Both listeners are published to loopback only. Put your own reverse
+    # proxy, tunnel, or overlay network in front of them (see README,
+    # "Exposing it from a home lab"). The same variable drives both halves of
+    # each mapping so the published port cannot drift from the one the app
+    # listens on. A blank UI_PORT disables the dashboard listener; the port
+    # is still published and simply refuses connections.
+    ports:
+      - "${MCP_BIND_ADDR:-127.0.0.1}:${PORT:-3000}:${PORT:-3000}"
+      - "${UI_BIND_ADDR:-127.0.0.1}:${UI_PORT:-3001}:${UI_PORT:-3001}"
+
+volumes:
+  gradebook-data: {}

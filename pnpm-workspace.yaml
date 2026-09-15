@@ -1,0 +1,8 @@
+# pnpm settings. pnpm 12 no longer reads the "pnpm" field in package.json,
+# and `onlyBuiltDependencies` was removed in v11 in favour of `allowBuilds`.
+#
+# esbuild is a build-time dependency of tsx/vitest; its install script links
+# the platform native binary. Approved explicitly so `--frozen-lockfile`
+# installs stay non-interactive in the Docker build.
+allowBuilds:
+  esbuild: true
