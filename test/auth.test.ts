@@ -6,6 +6,7 @@ import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createAccessAuthMiddleware } from '../src/auth/cloudflareAccess.js';
 import type { Config } from '../src/config.js';
+import { testConfig } from './helpers/config.js';
 
 const AUD = 'test-audience';
 const KID = 'test-key-1';
@@ -13,24 +14,15 @@ const ALLOWED_EMAIL = 'song@example.com';
 const ALLOWED_SERVICE_TOKEN = 'e367826f93b8d71185e03fe518aff3b4.access';
 
 function baseConfig(overrides: Partial<Config> = {}): Config {
-  return {
-    port: 0,
-    host: '0.0.0.0',
-    ui: { port: undefined, host: '0.0.0.0' },
-    nodeEnv: 'test',
-    logLevel: 'silent',
-    tz: 'UTC',
-    dataDir: './data',
-    mcpBearerToken: undefined,
+  return testConfig({
     access: {
       teamDomain: undefined,
       aud: AUD,
       allowedEmails: [ALLOWED_EMAIL],
       allowedServiceTokens: [ALLOWED_SERVICE_TOKEN],
     },
-    devInsecureNoAuth: false,
     ...overrides,
-  };
+  });
 }
 
 describe('Cloudflare Access auth middleware', () => {

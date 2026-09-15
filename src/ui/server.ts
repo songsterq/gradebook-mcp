@@ -28,6 +28,15 @@ export function createUiApp(ctx: UiContext, modules: readonly HomeModule[]): Exp
   const app = express();
   app.disable('x-powered-by');
 
+  // Matches /healthz on the MCP app so a liveness probe answers the same way
+  // whichever listener is running; without it a dashboard-only container has no
+  // port for the Docker HEALTHCHECK to hit. Registered ahead of the request
+  // logger and the security middleware: a probe every 30s would otherwise fill
+  // the log, and liveness must not depend on CSP nonces or the origin guard.
+  app.get('/healthz', (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+  });
+
   app.use((req, res, next) => {
     const startedAt = Date.now();
     // `req.originalUrl`, not `req.path`: a Router strips its mount path from `req.url`

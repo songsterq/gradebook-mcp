@@ -1,14 +1,15 @@
 import type { RequestHandler } from 'express';
 import type { Logger } from 'pino';
 import type { Config } from '../config.js';
-import { isDevInsecureNoAuthActive } from '../config.js';
+import { isDevInsecureNoAuthActive, StartupError } from '../config.js';
 import { createBearerAuthMiddleware } from './bearerToken.js';
 import { createAccessAuthMiddleware } from './cloudflareAccess.js';
 
 export type AuthMode = 'dev-insecure' | 'bearer' | 'cloudflare-access';
 
 const CONFIGURE_ONE =
-  'configure exactly one MCP auth mode: MCP_BEARER_TOKEN, or ACCESS_TEAM_DOMAIN + ACCESS_AUD (Cloudflare Access)';
+  'configure exactly one MCP auth mode: MCP_BEARER_TOKEN, or ACCESS_TEAM_DOMAIN + ACCESS_AUD ' +
+  '(Cloudflare Access); or leave PORT blank to run the dashboard only';
 
 /**
  * Which auth mode the config selects, or a startup error when it is ambiguous
@@ -20,15 +21,15 @@ export function resolveAuthMode(config: Config): AuthMode {
   if (isDevInsecureNoAuthActive(config)) return 'dev-insecure';
   const bearer = config.mcpBearerToken !== undefined;
   const access = config.access.teamDomain !== undefined || config.access.aud !== undefined;
-  if (bearer && access) throw new Error(`both MCP_BEARER_TOKEN and ACCESS_* are set; ${CONFIGURE_ONE}`);
+  if (bearer && access) throw new StartupError(`both MCP_BEARER_TOKEN and ACCESS_* are set; ${CONFIGURE_ONE}`);
   if (bearer) return 'bearer';
   if (access) {
     if (!config.access.teamDomain || !config.access.aud) {
-      throw new Error(`ACCESS_TEAM_DOMAIN and ACCESS_AUD must both be set; ${CONFIGURE_ONE}`);
+      throw new StartupError(`ACCESS_TEAM_DOMAIN and ACCESS_AUD must both be set; ${CONFIGURE_ONE}`);
     }
     return 'cloudflare-access';
   }
-  throw new Error(`no MCP auth configured; ${CONFIGURE_ONE}`);
+  throw new StartupError(`no MCP auth configured; ${CONFIGURE_ONE}`);
 }
 
 export function createAuthMiddleware(config: Config, logger: Logger): RequestHandler {

@@ -17,8 +17,13 @@ services:
     # proxy, tunnel, or overlay network in front of them (see README,
     # "Exposing it from a home lab"). The same variable drives both halves of
     # each mapping so the published port cannot drift from the one the app
-    # listens on. A blank UI_PORT disables the dashboard listener; the port
-    # is still published and simply refuses connections.
+    # listens on. Each listener is disabled by a blank port -- UI_PORT for the
+    # dashboard, PORT for MCP -- and at least one must be set.
+    #
+    # A disabled listener's mapping is still published here and simply refuses
+    # connections, which is harmless until something else on the host wants that
+    # port. For a dashboard-only deployment use compose.dashboard-only.yaml,
+    # which drops the MCP mapping entirely.
     ports:
       - "${MCP_BIND_ADDR:-127.0.0.1}:${PORT:-3000}:${PORT:-3000}"
       - "${UI_BIND_ADDR:-127.0.0.1}:${UI_PORT:-3001}:${UI_PORT:-3001}"

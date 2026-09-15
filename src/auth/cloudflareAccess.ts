@@ -2,7 +2,7 @@ import { createRemoteJWKSet, jwtVerify, errors as joseErrors, type JWTPayload } 
 import type { NextFunction, Request, Response } from 'express';
 import type { Logger } from 'pino';
 import type { Config } from '../config.js';
-import { isDevInsecureNoAuthActive } from '../config.js';
+import { isDevInsecureNoAuthActive, StartupError } from '../config.js';
 import type { Identity } from './identity.js';
 import { describeIdentity } from './identity.js';
 
@@ -95,7 +95,7 @@ export function createAccessAuthMiddleware(config: Config, logger: Logger) {
   let verifier: CloudflareAccessVerifier | undefined;
   if (!devBypass) {
     if (!config.access.teamDomain || !config.access.aud) {
-      throw new Error(
+      throw new StartupError(
         'ACCESS_TEAM_DOMAIN and ACCESS_AUD must be set unless DEV_INSECURE_NO_AUTH is active',
       );
     }

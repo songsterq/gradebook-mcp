@@ -25,7 +25,7 @@ const optionalPort = () =>
   );
 
 const envSchema = z.object({
-  PORT: z.coerce.number().int().positive().default(3000),
+  PORT: optionalPort(),
   HOST: z.string().default('0.0.0.0'),
   UI_PORT: optionalPort(),
   UI_HOST: z.string().optional(),
@@ -48,15 +48,20 @@ const envSchema = z.object({
   GRADEBOOK_SYNC_ENABLED: boolFromString(),
   GRADEBOOK_STUDENTS: csv(),
 
+  UI_ALLOW_WILDCARD_BIND: boolFromString(),
+
   DEV_INSECURE_NO_AUTH: boolFromString(),
 });
 
 export type Config = {
-  port: number;
+  /** MCP endpoint port. Undefined when PORT is blank: the MCP listener is off. */
+  port: number | undefined;
   host: string;
   ui: {
     port: number | undefined;
     host: string;
+    /** Operator states a wildcard bind is deliberate (e.g. inside a container). */
+    allowWildcardBind: boolean;
   };
   nodeEnv: 'development' | 'test' | 'production';
   logLevel: string;
@@ -82,13 +87,37 @@ export type Config = {
   devInsecureNoAuth: boolean;
 };
 
+/**
+ * A startup failure the operator can act on: no listener enabled, an unsafe
+ * bind, a bad env value, or an ambiguous auth mode. Reported as a single fatal
+ * log line rather than a stack trace, which tells an operator nothing useful.
+ */
+export class StartupError extends Error {
+  override readonly name = 'StartupError';
+}
+
+/** One readable line per bad field, instead of a raw ZodError issue dump. */
+function formatIssues(error: z.ZodError, env: NodeJS.ProcessEnv): string {
+  const details = error.issues.map((issue) => {
+    const field = issue.path.join('.') || '(root)';
+    const raw = env[field];
+    const got = raw === undefined ? 'unset' : JSON.stringify(raw);
+    // Lowercased so the field name and zod's sentence read as one line.
+    const reason = issue.message.charAt(0).toLowerCase() + issue.message.slice(1);
+    return `${field}: ${reason} (got ${got})`;
+  });
+  return `invalid configuration: ${details.join('; ')}`;
+}
+
 function blankToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = envSchema.parse(env);
+  const result = envSchema.safeParse(env);
+  if (!result.success) throw new StartupError(formatIssues(result.error, env));
+  const parsed = result.data;
   const dataDir = parsed.DATA_DIR;
 
   return {
@@ -96,7 +125,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: parsed.HOST,
     ui: {
       port: parsed.UI_PORT,
-      host: parsed.UI_HOST ?? parsed.HOST,
+      host: blankToUndefined(parsed.UI_HOST) ?? parsed.HOST,
+      allowWildcardBind: parsed.UI_ALLOW_WILDCARD_BIND,
     },
     nodeEnv: parsed.NODE_ENV,
     logLevel: parsed.LOG_LEVEL,
@@ -135,6 +165,51 @@ export function isDevInsecureNoAuthActive(config: Config): boolean {
 
 export function isUiEnabled(
   config: Config,
-): config is Config & { ui: { port: number; host: string } } {
+): config is Config & { ui: { port: number; host: string; allowWildcardBind: boolean } } {
   return config.ui.port !== undefined;
+}
+
+export function isMcpEnabled(config: Config): config is Config & { port: number } {
+  return config.port !== undefined;
+}
+
+/** Addresses that accept connections on every interface. */
+const WILDCARD_HOSTS = new Set(['', '0.0.0.0', '::', '[::]', '::0', '*']);
+
+/**
+ * Reject configurations that cannot or should not run, before anything binds.
+ *
+ * The bind check is scoped to dashboard-only deployments on purpose. With MCP
+ * off, the unauthenticated dashboard is the only thing listening, so a wildcard
+ * bind in production puts every student's grades on every interface with
+ * nothing in front of it. When MCP is enabled the operator has already had to
+ * configure auth, and existing deployments that bind 0.0.0.0 behind their own
+ * firewall keep working unchanged.
+ *
+ * A container legitimately binds 0.0.0.0 — Docker publishes to it, and Compose
+ * confines the exposure to UI_BIND_ADDR on the host instead. The process cannot
+ * tell that apart from a bare-metal wildcard bind, so UI_ALLOW_WILDCARD_BIND is
+ * how the operator says the port is confined elsewhere. The image sets it.
+ */
+export function assertRunnable(config: Config): void {
+  if (!isMcpEnabled(config) && !isUiEnabled(config)) {
+    throw new StartupError(
+      'no listener enabled: set PORT for the MCP endpoint, UI_PORT for the dashboard, or both',
+    );
+  }
+
+  if (
+    !isMcpEnabled(config) &&
+    config.nodeEnv === 'production' &&
+    !config.ui.allowWildcardBind &&
+    WILDCARD_HOSTS.has(config.ui.host.trim())
+  ) {
+    throw new StartupError(
+      `refusing to start: the dashboard is UNAUTHENTICATED and UI_HOST=${config.ui.host} would ` +
+        "expose every student's grades on every interface. Bind UI_HOST to 127.0.0.1 or a " +
+        'private/overlay address, or set UI_ALLOW_WILDCARD_BIND=true if something else ' +
+        'confines the port (the Docker image sets it, because Compose publishes to ' +
+        'UI_BIND_ADDR on the host instead).',
+    );
+  }
 }
