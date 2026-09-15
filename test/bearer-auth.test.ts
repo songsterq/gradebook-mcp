@@ -4,34 +4,11 @@ import express from 'express';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createAuthMiddleware, resolveAuthMode } from '../src/auth/middleware.js';
-import type { Config } from '../src/config.js';
+import { testConfig } from './helpers/config.js';
 
 const TOKEN = 'c0ffee-c0ffee-c0ffee-c0ffee-c0ffee';
 
-function baseConfig(overrides: Partial<Config> = {}): Config {
-  return {
-    port: 0,
-    host: '0.0.0.0',
-    ui: { port: undefined, host: '0.0.0.0' },
-    nodeEnv: 'test',
-    logLevel: 'silent',
-    tz: 'UTC',
-    dataDir: './data',
-    mcpBearerToken: undefined,
-    access: { teamDomain: undefined, aud: undefined, allowedEmails: [], allowedServiceTokens: [] },
-    gradebook: {
-      dbPath: ':memory:',
-      parentvueHost: undefined,
-      parentvueUser: undefined,
-      parentvuePass: undefined,
-      syncIntervalHours: 0,
-      syncEnabled: false,
-      students: [],
-    },
-    devInsecureNoAuth: false,
-    ...overrides,
-  };
-}
+const baseConfig = testConfig;
 
 describe('auth mode selection', () => {
   const logger = pino({ level: 'silent' });
@@ -57,6 +34,12 @@ describe('auth mode selection', () => {
 
   it('refuses neither mode', () => {
     expect(() => createAuthMiddleware(baseConfig(), logger)).toThrow(/exactly one/);
+  });
+
+  it('points a dashboard-only operator at the way out', () => {
+    // This is the error someone hits when they never wanted MCP at all, so it
+    // has to name the alternative rather than just demanding a token.
+    expect(() => createAuthMiddleware(baseConfig(), logger)).toThrow(/leave PORT blank/);
   });
 
   it('refuses a half-configured Access mode', () => {

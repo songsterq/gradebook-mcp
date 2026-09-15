@@ -12,8 +12,10 @@ view.
 
 - **Read-only upstream.** Nothing ever writes back to the school district.
 - **Local data.** One SQLite file on a Docker volume; grades stay on your box.
-- **Two listeners.** An authenticated MCP endpoint and a separate,
-  unauthenticated dashboard port meant only for private networks.
+- **Two independent listeners.** An authenticated MCP endpoint and a separate,
+  unauthenticated dashboard port meant only for private networks. Each is
+  optional: run both, MCP only, or the dashboard on its own with no MCP auth
+  to configure at all.
 - **No cloud dependency.** Docker Compose, Node 22, `node:sqlite`. No external
   database, no framework beyond Express.
 
@@ -48,6 +50,33 @@ enabled, is `http://127.0.0.1:3001/gradebook`. Both are published to loopback
 only; how to reach them from elsewhere is covered in
 [Exposing it from a home lab](#exposing-it-from-a-home-lab).
 
+### Dashboard only, without MCP
+
+If you just want the dashboard on your own network and have no use for the MCP
+tools, leave `PORT` blank. Nothing else is required — there is no MCP endpoint
+to protect, so no auth mode to configure:
+
+```sh
+cp .env.example .env
+```
+
+```ini
+PORT=
+UI_PORT=3001
+GRADEBOOK_PARENTVUE_HOST=<district>.edupoint.com
+GRADEBOOK_PARENTVUE_USER=you@example.com
+GRADEBOOK_PARENTVUE_PASS=...
+```
+
+```sh
+docker compose up -d --build
+curl http://127.0.0.1:3001/healthz        # {"status":"ok"}
+```
+
+The dashboard is then `http://127.0.0.1:3001/gradebook` and nothing listens on
+the MCP port. The dashboard is **unauthenticated** in every mode, so keep it on
+a private network; see [The dashboard](#the-dashboard-ui_port-default-off).
+
 The first sync happens when you press **Sync now** on the dashboard or call
 `gradebook_sync`. Automatic syncs are off until you opt in (see
 [Automatic sync](#automatic-sync-and-district-terms)).
@@ -58,11 +87,12 @@ All settings come from the environment; `.env` is read when present.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` / `HOST` | `3000` / `0.0.0.0` | MCP listener inside the container. |
+| `PORT` / `HOST` | blank (off) / `0.0.0.0` | MCP listener inside the container. Blank disables it; `.env.example` ships `PORT=3000`. |
 | `MCP_BIND_ADDR` | `127.0.0.1` | Host address Compose publishes the MCP port on. |
 | `UI_PORT` | blank (off) | Dashboard listener port. Blank disables it. |
 | `UI_HOST` | `HOST` | Dashboard listener interface inside the container. |
 | `UI_BIND_ADDR` | `127.0.0.1` | Host address Compose publishes the dashboard port on. |
+| `UI_ALLOW_WILDCARD_BIND` | `false` | Allows a dashboard-only install to bind `0.0.0.0` in production. Set in the Docker image; see [The dashboard](#the-dashboard-ui_port-default-off). |
 | `DATA_DIR` | `./data` (`/data` in Compose) | Where `gradebook.sqlite` lives. |
 | `TZ` | `UTC` | Timezone for "today" when picking the current reporting period. |
 | `LOG_LEVEL` | `info` | pino log level. Logs are JSON lines. |
@@ -115,8 +145,14 @@ lockout.
 
 ## Authentication
 
-The MCP endpoint requires **exactly one** of these modes; the process refuses
-to start with both or neither.
+Authentication guards the MCP endpoint. It is required whenever that endpoint
+is enabled, and irrelevant when it is not: a dashboard-only install (blank
+`PORT`) needs no auth configuration at all, because there is no MCP endpoint to
+protect. The dashboard itself is never authenticated in any mode — it is
+protected by network isolation only.
+
+When the MCP endpoint is enabled, it requires **exactly one** of these modes;
+the process refuses to start with both or neither.
 
 **Bearer token** (`MCP_BEARER_TOKEN`). Clients send
 `Authorization: Bearer <token>`. Comparison is constant-time. Use this behind
@@ -144,9 +180,10 @@ whose identity is not on an allowlist. Both are logged.
 
 Both ports are published to `127.0.0.1` by default, and that is the right
 starting point. The two listeners have very different trust levels, so treat
-them separately.
+them separately. A dashboard-only install has only the second half to worry
+about.
 
-### The MCP endpoint (`PORT`, default 3000)
+### The MCP endpoint (`PORT`, blank disables it)
 
 It is authenticated, so it *can* face the Internet — but only behind something
 that terminates TLS and, ideally, limits abuse. Three patterns that work:
@@ -179,7 +216,9 @@ credential-less and let the proxy run the OAuth flow.
 ### The dashboard (`UI_PORT`, default off)
 
 It is **unauthenticated by design** — a server-rendered page for a phone on the
-couch. Anyone who can reach the port can read every student's grades and
+couch. This is true whether or not MCP is enabled: running dashboard-only does
+not make the dashboard safer, it just removes the authenticated half of the
+server. Anyone who can reach the port can read every student's grades and
 trigger a district login. Reach it only over a network you already trust:
 
 - your LAN, with `UI_BIND_ADDR` left on loopback and a LAN-only reverse proxy,
@@ -187,6 +226,15 @@ trigger a district login. Reach it only over a network you already trust:
 - a private overlay network (`UI_BIND_ADDR` set to the overlay address, or the
   overlay's own HTTPS serving feature pointed at `127.0.0.1:3001`);
 - a VPN into the home network.
+
+Because a dashboard-only install has nothing else listening, it refuses to
+start in production when `UI_HOST` is a wildcard (`0.0.0.0` / `::`) — that
+combination would put the unauthenticated dashboard on every interface with
+nothing in front of it. Bind `UI_HOST` to loopback or a private/overlay address
+instead. A container is the exception: it *must* bind `0.0.0.0` for Docker to
+publish the port, and Compose confines the exposure to `UI_BIND_ADDR` on the
+host, so the image sets `UI_ALLOW_WILDCARD_BIND=true`. Set that variable
+yourself only when something outside the process genuinely confines the port.
 
 Never route a tunnel or public hostname to `UI_PORT`. The server logs an error
 and returns 403 when a dashboard request arrives carrying Cloudflare edge
@@ -280,7 +328,17 @@ The pnpm version is pinned via `packageManager` in `package.json`; pnpm 12
 enforces a `minimumReleaseAge` supply-chain policy by default, and a mismatched
 pnpm can resolve a lockfile the Docker build then rejects.
 
-For local iteration without any auth, set in `.env`:
+If you only need the dashboard while iterating, the simplest setup is no auth
+at all, because there is no MCP endpoint to protect:
+
+```sh
+PORT=
+UI_PORT=3001
+UI_HOST=127.0.0.1
+```
+
+To work on the MCP endpoint itself without configuring a credential, set in
+`.env`:
 
 ```sh
 NODE_ENV=development
@@ -317,17 +375,17 @@ be pointed at `http://127.0.0.1:3000/mcp` the same way.
 
 ```
 src/
-  index.ts                 bootstrap: config → MCP app + optional dashboard → listen
-  config.ts                zod-validated env config
-  server.ts                express app: /healthz, /mcp
+  index.ts                 bootstrap: config → each enabled listener → listen
+  config.ts                zod-validated env config; which listeners are enabled
+  server.ts                MCP express app: /healthz, /mcp
   audit.ts                 wraps tool handlers: logs identity, tool, args, duration, outcome
   auth/
-    middleware.ts          picks exactly one auth mode at startup
+    middleware.ts          picks exactly one auth mode at startup (MCP only)
     bearerToken.ts         Authorization: Bearer, constant-time compare
     cloudflareAccess.ts    verify Cf-Access-Jwt-Assertion, allowlists
     identity.ts            Identity type
   storage/sqlite.ts        SQLite open, migrations, transactions (node:sqlite)
-  ui/                      dashboard app, document shell, HTML escaping, CSP + cross-origin checks
+  ui/                      dashboard app: /healthz, document shell, HTML escaping, CSP + cross-origin checks
   modules/
     types.ts               module interface (MCP register + optional dashboard router)
     gradebook/             tools, store, sync, scheduler, migrations, dashboard views
@@ -338,8 +396,10 @@ test/                      auth, config, dashboard, and security middleware test
 
 ## Security notes
 
-- The dashboard is unauthenticated and isolated only by its own port. Keep it
-  on private networks; never expose it to the Internet.
+- The dashboard is unauthenticated and isolated only by its own port, in every
+  mode. Keep it on private networks; never expose it to the Internet. A
+  dashboard-only install refuses to start in production on a wildcard `UI_HOST`
+  unless `UI_ALLOW_WILDCARD_BIND` says something else confines the port.
 - Stateless Streamable HTTP: a fresh `McpServer` and transport per request, so
   there is no session state to lose behind a proxy and no SSE affinity
   concern.

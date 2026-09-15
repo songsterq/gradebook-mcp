@@ -1,7 +1,14 @@
 import pino from 'pino';
 import type { Server } from 'node:http';
 import { loadEnvFile } from 'node:process';
-import { isUiEnabled, loadConfig } from './config.js';
+import {
+  assertRunnable,
+  isMcpEnabled,
+  isUiEnabled,
+  loadConfig,
+  StartupError,
+  type Config,
+} from './config.js';
 import { createGradebookModule } from './modules/gradebook/index.js';
 import type { HomeModule } from './modules/types.js';
 import { createApp } from './server.js';
@@ -14,34 +21,78 @@ try {
   if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
 }
 
-const config = loadConfig();
-const logger = pino({ level: config.logLevel });
-const modules: HomeModule[] = [createGradebookModule(config, logger)];
+// Stands in until the config is parsed, so a bad config still has somewhere to
+// report. LOG_LEVEL is read raw because loadConfig may be the thing that failed.
+const bootLogger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
-const app = createApp(config, logger, modules);
-
-const server = app.listen(config.port, config.host, () => {
-  logger.info({ port: config.port, host: config.host }, 'gradebook-mcp listening');
-});
-server.on('error', (err) => {
-  logger.fatal({ err }, 'gradebook-mcp listener failed');
+/**
+ * Report a startup failure as one actionable line and exit.
+ *
+ * A StartupError is something the operator can fix from the message alone, so
+ * the stack would be noise; anything else is a bug and keeps its stack.
+ */
+function fail(log: pino.Logger, err: unknown): never {
+  if (err instanceof StartupError) log.fatal(err.message);
+  else log.fatal({ err }, 'unexpected startup failure');
   process.exit(1);
-});
+}
 
-const servers: Server[] = [server];
+function startupMessage(mcp: boolean, ui: boolean): string {
+  if (mcp && ui) return 'starting: MCP endpoint + dashboard';
+  if (mcp) return 'starting: MCP endpoint only (dashboard disabled: UI_PORT is blank)';
+  return 'starting: dashboard only (MCP disabled: PORT is blank)';
+}
 
-if (isUiEnabled(config)) {
-  const uiServer = createUiApp({ config, logger }, modules).listen(config.ui.port, config.ui.host, () => {
-    logger.warn(
-      { port: config.ui.port, host: config.ui.host },
-      `*** The gradebook dashboard on ${config.ui.host}:${config.ui.port} is UNAUTHENTICATED. Anyone who can reach this port can read every student's grades and trigger a ParentVUE sync. It is network-isolated only: never publish it to the Internet and never point a tunnel or public reverse-proxy route at it. ***`,
-    );
-  });
-  uiServer.on('error', (err) => {
-    logger.fatal({ err }, 'dashboard listener failed');
-    process.exit(1);
-  });
-  servers.push(uiServer);
+let config: Config;
+try {
+  config = loadConfig();
+  assertRunnable(config);
+} catch (err) {
+  fail(bootLogger, err);
+}
+
+// From here on, everything logs through one instance: two pino streams buffer
+// independently, which would let a fatal print ahead of a warning that happened
+// before it.
+const logger = pino({ level: config.logLevel });
+const modules: HomeModule[] = [];
+const servers: Server[] = [];
+
+try {
+  logger.info(startupMessage(isMcpEnabled(config), isUiEnabled(config)));
+
+  modules.push(createGradebookModule(config, logger));
+
+  // Each listener is independently optional; assertRunnable has already
+  // guaranteed at least one of them starts, which the shutdown path relies on.
+  if (isMcpEnabled(config)) {
+    const app = createApp(config, logger, modules);
+    const server = app.listen(config.port, config.host, () => {
+      logger.info({ port: config.port, host: config.host }, 'MCP endpoint listening');
+    });
+    server.on('error', (err) => {
+      logger.fatal({ err }, 'MCP listener failed');
+      process.exit(1);
+    });
+    servers.push(server);
+  }
+
+  if (isUiEnabled(config)) {
+    const uiServer = createUiApp({ config, logger }, modules).listen(config.ui.port, config.ui.host, () => {
+      logger.warn(
+        { port: config.ui.port, host: config.ui.host },
+        `*** The gradebook dashboard on ${config.ui.host}:${config.ui.port} is UNAUTHENTICATED. Anyone who can reach this port can read every student's grades and trigger a ParentVUE sync. It is network-isolated only: never publish it to the Internet and never point a tunnel or public reverse-proxy route at it. ***`,
+      );
+    });
+    uiServer.on('error', (err) => {
+      logger.fatal({ err }, 'dashboard listener failed');
+      process.exit(1);
+    });
+    servers.push(uiServer);
+  }
+} catch (err) {
+  for (const module of modules) module.dispose?.();
+  fail(logger, err);
 }
 
 let shuttingDown = false;

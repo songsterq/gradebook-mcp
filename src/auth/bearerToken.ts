@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import type { Logger } from 'pino';
+import { StartupError } from '../config.js';
 
 /**
  * Compare two secrets in constant time. Both sides are hashed first so a
@@ -29,7 +30,7 @@ function bearerFrom(req: Request): string | undefined {
  */
 export function createBearerAuthMiddleware(token: string, logger: Logger) {
   if (token.length < 16) {
-    throw new Error('MCP_BEARER_TOKEN must be at least 16 characters; generate one with `openssl rand -hex 32`');
+    throw new StartupError('MCP_BEARER_TOKEN must be at least 16 characters; generate one with `openssl rand -hex 32`');
   }
 
   return function bearerAuthMiddleware(req: Request, res: Response, next: NextFunction) {

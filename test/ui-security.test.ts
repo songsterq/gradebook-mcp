@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { Router, type Express } from 'express';
 import pino from 'pino';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Config } from '../src/config.js';
+import { testConfig } from './helpers/config.js';
 import type { HomeModule, UiContext } from '../src/modules/types.js';
 import { securityHeaders } from '../src/ui/security.js';
 import { createUiApp } from '../src/ui/server.js';
@@ -15,16 +15,12 @@ function listen(app: Express, host: string): Promise<Server> {
   });
 }
 
-const config: Config = {
+const config = testConfig({
   port: 0,
   host: '127.0.0.1',
-  ui: { port: 0, host: '127.0.0.1' },
-  nodeEnv: 'test',
-  logLevel: 'silent',
+  ui: { port: 0, host: '127.0.0.1', allowWildcardBind: false },
   tz: 'America/Los_Angeles',
   dataDir: '.',
-  mcpBearerToken: undefined,
-  access: { teamDomain: undefined, aud: undefined, allowedEmails: [], allowedServiceTokens: [] },
   gradebook: {
     dbPath: ':memory:',
     parentvueHost: 'example.invalid',
@@ -35,7 +31,7 @@ const config: Config = {
     students: [],
   },
   devInsecureNoAuth: true,
-};
+});
 
 /** Stands in for a module dashboard: one safe route and one mutating route,
  *  mounted under /probe so the mount-path logging behaviour is exercised. */
@@ -84,6 +80,29 @@ describe('dashboard cross-origin check', () => {
       });
     }
     server = undefined;
+  });
+
+  describe('dashboard-only mode', () => {
+    it('serves /healthz with no MCP auth configured', async () => {
+      // The Docker HEALTHCHECK falls back to this port when PORT is blank, so a
+      // dashboard-only container depends on it answering.
+      expect(config.mcpBearerToken).toBeUndefined();
+      expect(config.access.teamDomain).toBeUndefined();
+
+      const res = await fetch(`${baseUrl}/healthz`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ status: 'ok' });
+    });
+
+    it('serves the dashboard itself with no MCP auth configured', async () => {
+      const res = await fetch(`${baseUrl}/probe`);
+      expect(res.status).toBe(200);
+    });
+
+    it('keeps health probes out of the request log', async () => {
+      await fetch(`${baseUrl}/healthz`);
+      expect(lines.some((line) => line.path === '/healthz')).toBe(false);
+    });
   });
 
   function post(headers: Record<string, string>): Promise<Response> {
