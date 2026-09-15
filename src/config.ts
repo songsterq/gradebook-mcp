@@ -125,7 +125,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: parsed.HOST,
     ui: {
       port: parsed.UI_PORT,
-      host: parsed.UI_HOST ?? parsed.HOST,
+      host: blankToUndefined(parsed.UI_HOST) ?? parsed.HOST,
       allowWildcardBind: parsed.UI_ALLOW_WILDCARD_BIND,
     },
     nodeEnv: parsed.NODE_ENV,
@@ -174,7 +174,7 @@ export function isMcpEnabled(config: Config): config is Config & { port: number 
 }
 
 /** Addresses that accept connections on every interface. */
-const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '[::]', '::0', '*']);
+const WILDCARD_HOSTS = new Set(['', '0.0.0.0', '::', '[::]', '::0', '*']);
 
 /**
  * Reject configurations that cannot or should not run, before anything binds.

@@ -153,3 +153,27 @@ describe('UI_ALLOW_WILDCARD_BIND', () => {
     expect(() => assertRunnable(config)).toThrow(/UI_ALLOW_WILDCARD_BIND/);
   });
 });
+
+describe('UI_HOST', () => {
+  it('treats a blank UI_HOST as unset and inherits HOST', () => {
+    // .env.example ships UI_HOST= blank, and `?? ` does not catch an empty
+    // string: the dashboard bound every interface while reporting host "".
+    expect(loadConfig({ HOST: '10.0.0.5', UI_HOST: '' }).ui.host).toBe('10.0.0.5');
+    expect(loadConfig({ HOST: '10.0.0.5', UI_HOST: '  ' }).ui.host).toBe('10.0.0.5');
+    expect(loadConfig({ HOST: '10.0.0.5', UI_HOST: '127.0.0.1' }).ui.host).toBe('127.0.0.1');
+  });
+
+  it('refuses a blank UI_HOST inheriting a wildcard HOST in dashboard-only production', () => {
+    const config = loadConfig({ PORT: '', UI_PORT: '3001', HOST: '0.0.0.0', UI_HOST: '', NODE_ENV: 'production' });
+    expect(() => assertRunnable(config)).toThrow(/UNAUTHENTICATED/);
+  });
+
+  it('counts an empty host as a wildcard, since listen() binds everything', () => {
+    const config = testConfig({
+      port: undefined,
+      nodeEnv: 'production',
+      ui: { port: 3001, host: '', allowWildcardBind: false },
+    });
+    expect(() => assertRunnable(config)).toThrow(/UNAUTHENTICATED/);
+  });
+});
