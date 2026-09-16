@@ -6,3 +6,10 @@
 # installs stay non-interactive in the Docker build.
 allowBuilds:
   esbuild: true
+
+# The ParentVUE client under src/lib is published to npm as `parentvue`. As a
+# workspace package it gets its own toolchain, so it builds, tests, and packs
+# exactly as it ships. gradebook-mcp itself still compiles it from source via
+# relative imports rather than depending on the built package.
+packages:
+  - src/lib/parentvue

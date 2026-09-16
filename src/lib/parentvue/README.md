@@ -13,6 +13,9 @@ the district.
 npm install parentvue
 ```
 
+Requires Node.js 22 or later. It has no runtime dependencies and uses the
+platform's global `fetch`.
+
 ## Usage
 
 ```ts
@@ -100,21 +103,22 @@ Note: this API is the apps' current mobile interface, not a published public
 API. Edupoint retired the legacy SOAP service (`PXPCommunication.asmx`) in
 August 2026; districts may change this interface without notice.
 
-## Extracting from gradebook-mcp
+## Development
 
-This directory is self-contained: it imports nothing from the surrounding
-repo, has zero runtime dependencies, and ships its own tests and package
-metadata. To publish it standalone, copy this directory to a new repository
-(or `git subtree split -P src/lib/parentvue`), then `npm install` the dev
-toolchain and `npm publish`.
+The package lives in the
+[gradebook-mcp](https://github.com/songsterq/gradebook-mcp) repository as a
+pnpm workspace package, so `pnpm install` at the repository root also installs
+its toolchain. Its `tsconfig.json` extends the repository root's, keeping the
+compiler settings in one place.
 
-Inside gradebook-mcp it is **not** a pnpm workspace member, so its own
-`package.json` scripts do not run in place — there is no `node_modules` here.
-The repo's root `tsc` and `vitest` already compile and test these files; the
-`package.json` and `tsconfig.json` exist so the directory is ready to lift
-out. The local `tsconfig.json` deliberately duplicates the root compiler
-options (rather than extending it) so it still works once extracted; keep the
-two in step when the root's strictness changes.
+```sh
+pnpm --filter parentvue build
+pnpm --filter parentvue test
+```
+
+To release, bump `version` in `package.json`, then run `npm publish` from this
+directory. `prepublishOnly` rebuilds `dist/` from a clean slate and runs the
+tests first, so a stale or failing build is never published.
 
 ## License
 

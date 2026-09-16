@@ -1,13 +1,28 @@
 {
+  "author": "Song Qian",
+  "bugs": "https://github.com/songsterq/gradebook-mcp/issues",
   "description": "Dependency-free client for the ParentVUE/StudentVUE mobile JSON API",
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "README.md",
-    "LICENSE"
+    "src",
+    "!src/**/*.test.ts"
   ],
+  "homepage": "https://github.com/songsterq/gradebook-mcp/tree/main/src/lib/parentvue#readme",
   "keywords": [
     "parentvue",
     "studentvue",
@@ -22,12 +37,14 @@
   "repository": {
     "directory": "src/lib/parentvue",
     "type": "git",
-    "url": "https://github.com/songsterq/gradebook-mcp.git"
+    "url": "git+https://github.com/songsterq/gradebook-mcp.git"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build && npm test",
     "test": "vitest run"
   },
+  "sideEffects": false,
   "type": "module",
   "types": "./dist/index.d.ts",
   "version": "0.2.0"
