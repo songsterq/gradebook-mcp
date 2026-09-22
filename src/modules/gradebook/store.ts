@@ -42,8 +42,8 @@ function toStudent(row: RawRow): Student {
 
 const TERM_WITH_COUNTS = `
   SELECT t.*,
-    (SELECT COUNT(*) FROM courses c WHERE c.term_id = t.id AND c.stale = 0) AS course_count,
-    (SELECT COALESCE(SUM(c.missing_count), 0) FROM courses c WHERE c.term_id = t.id AND c.stale = 0) AS missing_count
+    (SELECT COUNT(*) FROM course_marks cm WHERE cm.term_id = t.id AND cm.stale = 0) AS course_count,
+    (SELECT COALESCE(SUM(cm.missing_count), 0) FROM course_marks cm WHERE cm.term_id = t.id AND cm.stale = 0) AS missing_count
   FROM terms t
 `;
 
@@ -166,11 +166,17 @@ export interface UpsertTermInput {
 }
 
 export interface UpsertCourseInput {
-  termId: string;
+  studentId: string;
+  schoolYear: string;
   title: string;
   teacher?: string | null;
   room?: string | null;
   period?: string | null;
+}
+
+export interface UpsertCourseMarkInput {
+  courseId: string;
+  termId: string;
   gradeLetter?: string | null;
   gradeScore?: number | null;
 }
@@ -250,12 +256,29 @@ export class GradebookStore {
 
   courses(termId: string): Course[] {
     return (
-      this.db.prepare('SELECT * FROM courses WHERE term_id = ? AND stale = 0 ORDER BY title').all(termId) as RawRow[]
+      this.db.prepare(`
+        SELECT c.id, cm.term_id, c.title, c.teacher, c.room, c.period,
+               cm.grade_letter, cm.grade_score, cm.missing_count, c.last_synced_at
+        FROM courses c
+        JOIN course_marks cm ON cm.course_id = c.id
+        WHERE cm.term_id = ? AND cm.stale = 0 AND c.stale = 0
+        ORDER BY c.title
+      `).all(termId) as RawRow[]
     ).map(toCourse);
   }
 
   resolveCourse(id: string): { course: Course; term: Term; student: Student } {
-    const courseRow = this.db.prepare('SELECT * FROM courses WHERE id = ? AND stale = 0').get(id) as RawRow | undefined;
+    const todayYmd = new Date().toISOString().slice(0, 10);
+    const courseRow = this.db.prepare(`
+      SELECT c.id, cm.term_id, c.title, c.teacher, c.room, c.period,
+             cm.grade_letter, cm.grade_score, cm.missing_count, c.last_synced_at
+      FROM courses c
+      JOIN course_marks cm ON cm.course_id = c.id
+      JOIN terms t ON t.id = cm.term_id
+      WHERE c.id = ? AND c.stale = 0 AND cm.stale = 0
+      ORDER BY ${CURRENT_TERM_ORDER}
+      LIMIT 1
+    `).get(id, ...new Array<string>(CURRENT_TERM_ORDER_PARAMS).fill(todayYmd)) as RawRow | undefined;
     if (!courseRow) throw new GradebookError('not_found', `No course matches '${id}'.`);
     const course = toCourse(courseRow);
     const termRow = this.db.prepare('SELECT * FROM terms WHERE id = ?').get(course.termId) as RawRow | undefined;
@@ -267,22 +290,28 @@ export class GradebookStore {
     return { course, term: toTerm({ ...termRow, course_count: 0, missing_count: 0 }), student: toStudent(studentRow) };
   }
 
-  assignments(courseId: string, filter: AssignmentStatusFilter): Assignment[] {
-    let where = 'course_id = ?';
+  assignments(courseId: string, filter: AssignmentStatusFilter, termId?: string): Assignment[] {
+    let from = 'assignments a';
+    let where = 'a.course_id = ?';
     const params: SQLInputValue[] = [courseId];
+    if (termId !== undefined) {
+      from += ' JOIN assignment_terms at ON at.assignment_id = a.id';
+      where += ' AND at.term_id = ?';
+      params.push(termId);
+    }
     if (filter === 'missing') {
-      where += ` AND status IN (${ACTIONABLE_STATUSES.map((s) => `'${s}'`).join(',')}) AND stale = 0`;
+      where += ` AND a.status IN (${ACTIONABLE_STATUSES.map((s) => `'${s}'`).join(',')}) AND a.stale = 0`;
     } else if (filter === 'upcoming') {
-      where += ` AND status = 'not_due' AND stale = 0`;
+      where += ` AND a.status = 'not_due' AND a.stale = 0`;
     } else if (filter === 'scored') {
-      where += ` AND status = 'scored' AND stale = 0`;
+      where += ` AND a.status = 'scored' AND a.stale = 0`;
     }
     // Newest first, matching ParentVUE's own assignment list: what a parent
     // wants to see on opening a course is what was just graded, not September.
     // Undated rows sort last, where they can't push recent work off the top.
     return (
       this.db
-        .prepare(`SELECT * FROM assignments WHERE ${where} ORDER BY due_date IS NULL, due_date DESC, title`)
+        .prepare(`SELECT a.* FROM ${from} WHERE ${where} ORDER BY a.due_date IS NULL, a.due_date DESC, a.title`)
         .all(...params) as RawRow[]
     ).map(toAssignment);
   }
@@ -320,10 +349,12 @@ export class GradebookStore {
         `SELECT a.*, c.title AS course_title, s.id AS student_id, s.name AS student_name,
                 t.school_year AS school_year, t.reporting_period AS reporting_period
          FROM assignments a
+         JOIN assignment_terms at ON at.assignment_id = a.id
+         JOIN terms t ON t.id = at.term_id
          JOIN courses c ON c.id = a.course_id
-         JOIN terms t ON t.id = c.term_id
-         JOIN students s ON s.id = t.student_id
-         WHERE a.status IN (${actionable}) AND a.stale = 0 AND c.stale = 0 ${studentFilter}
+         JOIN course_marks cm ON cm.course_id = c.id AND cm.term_id = t.id
+         JOIN students s ON s.id = c.student_id
+         WHERE a.status IN (${actionable}) AND a.stale = 0 AND c.stale = 0 AND cm.stale = 0 ${studentFilter}
            ${termFilter}
          ORDER BY a.due_date IS NULL, a.due_date, s.name, c.title`,
       )
@@ -338,10 +369,15 @@ export class GradebookStore {
   }
 
   trend(courseId: string): GradePoint[] {
+    const { course } = this.resolveCourse(courseId);
+    const mark = this.db
+      .prepare('SELECT id FROM course_marks WHERE course_id = ? AND term_id = ?')
+      .get(courseId, course.termId) as RawRow | undefined;
+    if (!mark) throw new GradebookError('not_found', 'Course mark is missing.');
     return (
       this.db
-        .prepare('SELECT observed_at, grade_letter, grade_score FROM grade_history WHERE course_id = ? ORDER BY observed_at')
-        .all(courseId) as RawRow[]
+        .prepare('SELECT observed_at, grade_letter, grade_score FROM grade_history WHERE mark_id = ? ORDER BY observed_at')
+        .all(String(mark['id'])) as RawRow[]
     ).map((row) => ({
       observedAt: String(row['observed_at']),
       gradeLetter: str(row['grade_letter']),
@@ -421,51 +457,84 @@ export class GradebookStore {
     });
   }
 
-  /**
-   * Upsert a course row for one term. Returns the id and, when the posted
-   * grade changed (including first observation), the before/after pair so the
-   * caller can append to grade_history exactly once.
-   */
   upsertCourse(
     input: UpsertCourseInput,
+    now: string,
+  ): { id: string; created: boolean } {
+    return withTransaction(this.db, () => {
+      const existing = this.db
+        .prepare('SELECT id FROM courses WHERE student_id = ? AND school_year = ? AND title = ?')
+        .get(input.studentId, input.schoolYear, input.title) as RawRow | undefined;
+      if (existing) {
+        const id = String(existing['id']);
+        this.db
+          .prepare(
+            'UPDATE courses SET teacher = ?, room = ?, period = ?, last_synced_at = ? WHERE id = ?',
+          )
+          .run(input.teacher ?? null, input.room ?? null, input.period ?? null, now, id);
+        return { id, created: false };
+      }
+      const id = newId('crs');
+      this.db
+        .prepare(
+          'INSERT INTO courses (id, student_id, school_year, title, teacher, room, period, last_synced_at) VALUES (?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          id,
+          input.studentId,
+          input.schoolYear,
+          input.title,
+          input.teacher ?? null,
+          input.room ?? null,
+          input.period ?? null,
+          now,
+        );
+      return { id, created: true };
+    });
+  }
+
+  /** Return a grade change on first observation and whenever a term's mark changes. */
+  upsertCourseMark(
+    input: UpsertCourseMarkInput,
     now: string,
   ): { id: string; gradeChanged: { before: { letter: string | null; score: number | null }; after: { letter: string | null; score: number | null } } | null } {
     return withTransaction(this.db, () => {
       const existing = this.db
-        .prepare('SELECT * FROM courses WHERE term_id = ? AND title = ?')
-        .get(input.termId, input.title) as RawRow | undefined;
+        .prepare('SELECT * FROM course_marks WHERE course_id = ? AND term_id = ?')
+        .get(input.courseId, input.termId) as RawRow | undefined;
       const letter = input.gradeLetter ?? null;
       const score = input.gradeScore ?? null;
       if (existing) {
         const id = String(existing['id']);
         const before = { letter: str(existing['grade_letter']), score: num(existing['grade_score']) };
         const changed = before.letter !== letter || before.score !== score;
-        const everObserved =
-          (this.db.prepare('SELECT COUNT(*) AS n FROM grade_history WHERE course_id = ?').get(id) as RawRow)['n'] as number;
+        const everObserved = Number(
+          (this.db.prepare('SELECT COUNT(*) AS n FROM grade_history WHERE mark_id = ?').get(id) as RawRow)['n'] ?? 0,
+        );
         this.db
           .prepare(
-            'UPDATE courses SET teacher = ?, room = ?, period = ?, grade_letter = ?, grade_score = ?, last_synced_at = ?, stale = 0 WHERE id = ?',
+            'UPDATE course_marks SET grade_letter = ?, grade_score = ?, last_synced_at = ?, stale = 0 WHERE id = ?',
           )
-          .run(input.teacher ?? null, input.room ?? null, input.period ?? null, letter, score, now, id);
+          .run(letter, score, now, id);
         return {
           id,
           gradeChanged: changed || everObserved === 0 ? { before, after: { letter, score } } : null,
         };
       }
-      const id = newId('crs');
+      const id = newId('mrk');
       this.db
         .prepare(
-          'INSERT INTO courses (id, term_id, title, teacher, room, period, grade_letter, grade_score, missing_count, last_synced_at) VALUES (?,?,?,?,?,?,?,?,0,?)',
+          'INSERT INTO course_marks (id, course_id, term_id, grade_letter, grade_score, last_synced_at) VALUES (?,?,?,?,?,?)',
         )
-        .run(id, input.termId, input.title, input.teacher ?? null, input.room ?? null, input.period ?? null, letter, score, now);
+        .run(id, input.courseId, input.termId, letter, score, now);
       return { id, gradeChanged: { before: { letter: null, score: null }, after: { letter, score } } };
     });
   }
 
-  appendGradeHistory(courseId: string, observedAt: string, letter: string | null, score: number | null): void {
+  appendGradeHistory(markId: string, observedAt: string, letter: string | null, score: number | null): void {
     this.db
-      .prepare('INSERT INTO grade_history (course_id, observed_at, grade_letter, grade_score) VALUES (?,?,?,?)')
-      .run(courseId, observedAt, letter, score);
+      .prepare('INSERT INTO grade_history (mark_id, observed_at, grade_letter, grade_score) VALUES (?,?,?,?)')
+      .run(markId, observedAt, letter, score);
   }
 
   upsertAssignment(
@@ -532,50 +601,81 @@ export class GradebookStore {
     });
   }
 
-  /** Mark assignments of a course that were absent from the latest snapshot as stale. */
-  markStaleAssignments(courseId: string, seenExtKeys: ReadonlySet<string>): number {
-    const seen = [...seenExtKeys];
-    const placeholders = seen.map(() => '?').join(',');
-    const notSeen = seen.length > 0 ? `AND ext_key NOT IN (${placeholders})` : '';
-    const result = this.db
-      .prepare(`UPDATE assignments SET stale = 1 WHERE course_id = ? AND stale = 0 ${notSeen}`)
-      .run(courseId, ...seen);
-    return Number(result.changes);
-  }
-
-  /** Hide courses absent from a successfully fetched term and stale their assignments. */
-  markStaleCourses(termId: string, seenTitles: ReadonlySet<string>): number {
+  replaceTermMemberships(termId: string, studentId: string, seenAssignmentIds: ReadonlySet<string>): void {
     return withTransaction(this.db, () => {
-      const seen = [...seenTitles];
+      const seen = [...seenAssignmentIds];
       const placeholders = seen.map(() => '?').join(',');
-      const notSeen = seen.length > 0 ? `AND title NOT IN (${placeholders})` : '';
-      const assignments = this.db
-        .prepare(
-          `UPDATE assignments SET stale = 1
-           WHERE stale = 0 AND course_id IN (
-             SELECT id FROM courses WHERE term_id = ? ${notSeen}
-           )`,
-        )
-        .run(termId, ...seen);
+      const notSeen = seen.length > 0 ? `AND at.assignment_id NOT IN (${placeholders})` : '';
       this.db
-        .prepare(`UPDATE courses SET stale = 1, missing_count = 0 WHERE term_id = ? AND stale = 0 ${notSeen}`)
-        .run(termId, ...seen);
-      return Number(assignments.changes);
+        .prepare(
+          `DELETE FROM assignment_terms AS at
+           WHERE at.term_id = ? ${notSeen}
+             AND at.assignment_id IN (
+               SELECT a.id FROM assignments a
+               JOIN courses c ON c.id = a.course_id
+               WHERE c.student_id = ?
+             )`,
+        )
+        .run(termId, ...seen, studentId);
+      const insert = this.db.prepare(
+        'INSERT OR IGNORE INTO assignment_terms (assignment_id, term_id) VALUES (?, ?)',
+      );
+      for (const assignmentId of seen) insert.run(assignmentId, termId);
     });
   }
 
-  recomputeMissingCount(courseId: string): number {
-    const count = Number(
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS n FROM assignments WHERE course_id = ? AND stale = 0 AND status IN (${ACTIONABLE_STATUSES.map((s) => `'${s}'`).join(',')})`,
+  markStaleCourseMarks(termId: string, seenCourseIds: ReadonlySet<string>): void {
+    const seen = [...seenCourseIds];
+    const placeholders = seen.map(() => '?').join(',');
+    const notSeen = seen.length > 0 ? `AND course_id NOT IN (${placeholders})` : '';
+    this.db
+      .prepare(`UPDATE course_marks SET stale = 1, missing_count = 0 WHERE term_id = ? ${notSeen}`)
+      .run(termId, ...seen);
+  }
+
+  /** Derive aggregate staleness after all complete-period memberships are replaced. */
+  sweepStale(studentId: string): number {
+    return withTransaction(this.db, () => {
+      const newlyStale = this.db.prepare(`
+        UPDATE assignments SET stale = 1
+        WHERE course_id IN (SELECT id FROM courses WHERE student_id = ?)
+          AND stale = 0
+          AND NOT EXISTS (
+            SELECT 1 FROM assignment_terms at WHERE at.assignment_id = assignments.id
           )
-          .get(courseId) as RawRow
-      )['n'] ?? 0,
-    );
-    this.db.prepare('UPDATE courses SET missing_count = ? WHERE id = ?').run(count, courseId);
-    return count;
+      `).run(studentId);
+      this.db.prepare(`
+        UPDATE assignments SET stale = 0
+        WHERE course_id IN (SELECT id FROM courses WHERE student_id = ?)
+          AND stale = 1
+          AND EXISTS (
+            SELECT 1 FROM assignment_terms at WHERE at.assignment_id = assignments.id
+          )
+      `).run(studentId);
+      this.db.prepare(`
+        UPDATE courses
+        SET stale = CASE WHEN EXISTS (
+          SELECT 1 FROM course_marks cm WHERE cm.course_id = courses.id AND cm.stale = 0
+        ) THEN 0 ELSE 1 END
+        WHERE student_id = ?
+      `).run(studentId);
+      return Number(newlyStale.changes);
+    });
+  }
+
+  recomputeMissingCounts(studentId: string): void {
+    this.db.prepare(`
+      UPDATE course_marks
+      SET missing_count = (
+        SELECT COUNT(*)
+        FROM assignments a
+        JOIN assignment_terms at ON at.assignment_id = a.id AND at.term_id = course_marks.term_id
+        WHERE a.course_id = course_marks.course_id
+          AND a.stale = 0
+          AND a.status IN (${ACTIONABLE_STATUSES.map((s) => `'${s}'`).join(',')})
+      )
+      WHERE course_id IN (SELECT id FROM courses WHERE student_id = ?)
+    `).run(studentId);
   }
 
   /** `trigger` is required, not defaulted: a run whose origin nobody recorded is

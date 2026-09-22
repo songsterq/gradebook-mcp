@@ -83,7 +83,7 @@ export function createGradebookUiRouter(
         term && view === 'courses'
           ? store.courses(term.id).map((course) => ({
               course,
-              assignments: store.assignments(course.id, 'all'),
+              assignments: store.assignments(course.id, 'all', term.id),
             }))
           : [];
       // Scoped to the term the picker is showing, so the badge and the table

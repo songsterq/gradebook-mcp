@@ -286,6 +286,168 @@ describe('diffIntoStore', () => {
   });
 });
 
+describe('multi-period course merging', () => {
+  const periods = [
+    { index: 0, gu: '', name: 'Quarter 1', startDate: '2026-09-02', endDate: '2026-11-06' },
+    { index: 1, gu: '', name: 'Semester 1 Final', startDate: '2026-11-09', endDate: '2027-01-28' },
+    { index: 2, gu: '', name: 'Quarter 3', startDate: '2027-02-01', endDate: '2027-04-09' },
+    { index: 3, gu: '', name: 'Semester 2 Final', startDate: '2027-04-19', endDate: '2027-06-23' },
+  ];
+  const child = { id: '111', name: 'Aiden Chien', raw: {} };
+  const work = (id: string, title: string, status: 'missing' | 'scored' | 'not_due' = 'scored') => ({
+    id,
+    title,
+    status,
+    raw: {},
+  });
+  const mark = (periodIndex: number, assignments: ReturnType<typeof work>[], letter = 'B') => ({
+    reportingPeriod: periods[periodIndex]!,
+    periodIndex,
+    letter,
+    score: letter === 'A' ? 4 : 3,
+    assignments,
+    raw: {},
+  });
+  const book = (
+    courses: Array<{ title: string; marks: ReturnType<typeof mark>[] }>,
+    completePeriodIndexes: number[],
+  ) => ({
+    childId: child.id,
+    reportingPeriods: periods,
+    completePeriodIndexes,
+    courses: courses.map((course) => ({ ...course, raw: {} })),
+  });
+
+  it('stores one course, one assignment row, and one mark per period idempotently', () => {
+    const store = freshStore();
+    const shared = work('shared', 'Shared Quiz');
+    const snapshot = book([{ title: 'Science', marks: [mark(0, [shared]), mark(1, [shared], 'A')] }], [0, 1]);
+
+    const first = diffIntoStore(store, { child, info: undefined, gradebook: snapshot }, NOW.toISOString(), '2026-09-13');
+    const second = diffIntoStore(store, { child, info: undefined, gradebook: snapshot }, NOW.toISOString(), '2026-09-13');
+    const student = store.resolveStudent(child.name);
+    const q1 = store.resolveTerm(student.id, '2026-2027', 'Quarter 1');
+    const s1 = store.resolveTerm(student.id, '2026-2027', 'Semester 1 Final');
+
+    expect(first.courses).toBe(1);
+    expect(second.courses).toBe(1);
+    expect(store.counts()).toMatchObject({ courses: 1, assignments: 1 });
+    expect(store.courses(q1.id)).toHaveLength(1);
+    expect(store.courses(s1.id)).toHaveLength(1);
+    expect(store.courses(q1.id)[0]?.id).toBe(store.courses(s1.id)[0]?.id);
+    expect(store.courses(q1.id)[0]?.gradeLetter).toBe('B');
+    expect(store.courses(s1.id)[0]?.gradeLetter).toBe('A');
+    const courseId = store.courses(q1.id)[0]!.id;
+    expect(store.assignments(courseId, 'all').map((assignment) => assignment.extKey)).toEqual(['shared']);
+    expect(store.trend(courseId)).toHaveLength(1);
+  });
+
+  it('keeps shared work live until every complete period drops it', () => {
+    const store = freshStore();
+    const shared = work('shared', 'Shared Quiz');
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([{ title: 'Science', marks: [mark(0, [shared]), mark(1, [shared])] }], [0, 1]),
+    }, NOW.toISOString(), '2026-09-13');
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([{ title: 'Science', marks: [mark(0, []), mark(1, [shared])] }], [0, 1]),
+    }, '2026-09-14T12:00:00.000Z', '2026-09-14');
+
+    const student = store.resolveStudent(child.name);
+    const q1 = store.resolveTerm(student.id, '2026-2027', 'Quarter 1');
+    const s1 = store.resolveTerm(student.id, '2026-2027', 'Semester 1 Final');
+    const course = store.courses(q1.id)[0]!;
+    expect(store.assignments(course.id, 'all', q1.id)).toEqual([]);
+    expect(store.assignments(course.id, 'all', s1.id)).toHaveLength(1);
+    expect(store.assignments(course.id, 'all')[0]?.stale).toBe(false);
+
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([{ title: 'Science', marks: [mark(0, []), mark(1, [])] }], [0, 1]),
+    }, '2026-09-15T12:00:00.000Z', '2026-09-15');
+    expect(store.assignments(course.id, 'all')[0]?.stale).toBe(true);
+  });
+
+  it('leaves memberships alone when a reporting-period fetch failed', () => {
+    const store = freshStore();
+    const s1Only = work('s1', 'Semester Work');
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([{ title: 'Science', marks: [mark(0, []), mark(1, [s1Only])] }], [0, 1]),
+    }, NOW.toISOString(), '2026-09-13');
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([{ title: 'Science', marks: [mark(0, [])] }], [0]),
+    }, '2026-09-14T12:00:00.000Z', '2026-09-14');
+
+    const student = store.resolveStudent(child.name);
+    const s1 = store.resolveTerm(student.id, '2026-2027', 'Semester 1 Final');
+    const course = store.courses(s1.id)[0]!;
+    expect(store.assignments(course.id, 'all', s1.id).map((assignment) => assignment.title)).toEqual(['Semester Work']);
+    expect(store.assignments(course.id, 'all')[0]?.stale).toBe(false);
+  });
+
+  it('handles semester-only and later-starting courses without touching earlier periods', () => {
+    const store = freshStore();
+    const scienceQ1 = work('science-q1', 'Science Q1');
+    const peWork = work('pe', 'PE Work');
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([
+        { title: 'Science', marks: [mark(0, [scienceQ1]), mark(1, [scienceQ1])] },
+        { title: 'PE 6th', marks: [mark(0, [peWork], 'A'), mark(1, [peWork], 'A')] },
+      ], [0, 1, 2, 3]),
+    }, NOW.toISOString(), '2026-09-13');
+
+    const student = store.resolveStudent(child.name);
+    const q1 = store.resolveTerm(student.id, '2026-2027', 'Quarter 1');
+    const s1 = store.resolveTerm(student.id, '2026-2027', 'Semester 1 Final');
+    const q3 = store.resolveTerm(student.id, '2026-2027', 'Quarter 3');
+    const s2 = store.resolveTerm(student.id, '2026-2027', 'Semester 2 Final');
+    const peId = store.courses(q1.id).find((course) => course.title === 'PE 6th')!.id;
+
+    const algebraWork = work('algebra', 'Algebra Warmup');
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([{ title: 'Algebra', marks: [mark(2, [algebraWork], 'A'), mark(3, [algebraWork], 'A')] }], [2, 3]),
+    }, '2026-09-14T12:00:00.000Z', '2026-09-14');
+
+    expect(store.courses(q1.id).map((course) => course.title)).toEqual(['PE 6th', 'Science']);
+    expect(store.courses(s1.id).map((course) => course.title)).toEqual(['PE 6th', 'Science']);
+    expect(store.courses(q3.id).map((course) => course.title)).toEqual(['Algebra']);
+    expect(store.courses(s2.id).map((course) => course.title)).toEqual(['Algebra']);
+    expect(store.resolveCourse(peId).course.title).toBe('PE 6th');
+    const algebra = store.courses(q3.id)[0]!;
+    expect(store.resolveCourse(algebra.id).course).toMatchObject({ termId: q3.id, gradeLetter: 'A' });
+    expect(store.assignments(store.courses(q1.id).find((course) => course.title === 'Science')!.id, 'all', q1.id)).toHaveLength(1);
+  });
+
+  it('computes different missing counts from each period membership', () => {
+    const store = freshStore();
+    const missing = work('missing', 'Q1 Missing', 'missing');
+    diffIntoStore(store, {
+      child,
+      info: undefined,
+      gradebook: book([{ title: 'Science', marks: [mark(0, [missing]), mark(1, [])] }], [0, 1]),
+    }, NOW.toISOString(), '2026-09-13');
+    const student = store.resolveStudent(child.name);
+    const q1 = store.resolveTerm(student.id, '2026-2027', 'Quarter 1');
+    const s1 = store.resolveTerm(student.id, '2026-2027', 'Semester 1 Final');
+    expect(store.courses(q1.id)[0]?.missingCount).toBe(1);
+    expect(store.courses(s1.id)[0]?.missingCount).toBe(0);
+    expect(store.missing(student.id, q1.id)).toHaveLength(1);
+    expect(store.missing(student.id, s1.id)).toHaveLength(0);
+  });
+});
+
 describe('reporting period identity', () => {
   it('files each mark under the period index upstream gave it, not its array position', () => {
     const store = freshStore();

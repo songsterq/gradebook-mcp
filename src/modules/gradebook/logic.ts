@@ -11,7 +11,7 @@ import type {
 
 const ID_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
 
-export type IdPrefix = 'stu' | 'trm' | 'crs' | 'asn';
+export type IdPrefix = 'stu' | 'trm' | 'crs' | 'mrk' | 'asn';
 
 /** Generate a short copy-friendly id, rejecting bytes that would introduce modulo bias. */
 export function newId(prefix: IdPrefix): string {
