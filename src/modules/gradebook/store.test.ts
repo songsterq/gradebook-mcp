@@ -41,6 +41,31 @@ describe('gradebook migration v5', () => {
   });
 });
 
+describe('gradebook migration v6', () => {
+  it('dates actionable rows to first sight and leaves other rows null', () => {
+    const db = openDatabase(':memory:');
+    migrate(db, MIGRATIONS.filter((migration) => migration.version <= 5));
+    db.exec(`
+      INSERT INTO students VALUES ('stu_a', 'pv_a', 'Aiden', 'Odle', NULL, '2026-09-01', '2026-09-01');
+      INSERT INTO courses (id, student_id, school_year, title) VALUES ('crs_a', 'stu_a', '2026-2027', 'Science');
+      INSERT INTO assignments (id, course_id, ext_key, title, status, first_seen_at, last_seen_at)
+      VALUES ('asn_missing', 'crs_a', 'm', 'Missing', 'missing', '2026-09-01', '2026-09-20'),
+        ('asn_incomplete', 'crs_a', 'i', 'Incomplete', 'incomplete', '2026-09-02', '2026-09-20'),
+        ('asn_late', 'crs_a', 'l', 'Late', 'late', '2026-09-03', '2026-09-20'),
+        ('asn_scored', 'crs_a', 's', 'Scored', 'scored', '2026-09-04', '2026-09-20');
+    `);
+    migrate(db, MIGRATIONS);
+    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 6 });
+    expect(db.prepare('SELECT id, missing_at FROM assignments ORDER BY id').all()).toEqual([
+      { id: 'asn_incomplete', missing_at: '2026-09-02' },
+      { id: 'asn_late', missing_at: '2026-09-03' },
+      { id: 'asn_missing', missing_at: '2026-09-01' },
+      { id: 'asn_scored', missing_at: null },
+    ]);
+    db.close();
+  });
+});
+
 describe('score helpers', () => {
   it('compares numeric values and trimmed, case-sensitive code marks', () => {
     expect(scoreKey(3.5, '3.5')).toBe(scoreKey(3.5, '3.50'));
@@ -416,5 +441,80 @@ describe('sticky whatsNew', () => {
     const zoned = renderOverview([{ student, term: null, courses: [], whatsNew: store.whatsNew(studentId) }], 'America/Los_Angeles');
     expect(zoned).toContain("What's new since Sep 19, 2026, 5:00 PM");
     expect(overview()).toContain('Lab (Science) · new assignment · —');
+  });
+});
+
+describe('missing transitions as news', () => {
+  let store: GradebookStore;
+  beforeEach(() => { store = freshStore(); });
+
+  function setup() {
+    const first = '2026-09-20T00:00:00.000Z';
+    const studentId = store.upsertStudent({ parentvueId: 'p', name: 'Aiden', school: 'Odle' }, first).id;
+    const courseId = store.upsertCourse({ studentId, schoolYear: YEAR, title: 'Science' }, first).id;
+    const put = (key: string, status: 'scored' | 'missing' | 'late' | 'incomplete', at: string, score?: number) =>
+      store.upsertAssignment({ courseId, extKey: key, title: key, status, score, scoreRaw: score === undefined ? null : String(score) }, at);
+    put('bootstrap', 'scored', first);
+    return { studentId, courseId, put };
+  }
+
+  it('records a later missing transition and keeps it through actionable status changes', () => {
+    const { studentId, courseId, put } = setup();
+    const first = '2026-09-20T01:00:00.000Z';
+    const missing = '2026-09-21T01:00:00.000Z';
+    put('work', 'scored', first, 3);
+    put('work', 'missing', missing, 3);
+    expect(store.assignments(courseId, 'all').find((a) => a.extKey === 'work')?.missingAt).toBe(missing);
+    expect(store.whatsNew(studentId).items.map((item) => [item.kind, item.assignment.title])).toEqual([['now_missing', 'work']]);
+    put('work', 'late', '2026-09-21T02:00:00.000Z', 3);
+    expect(store.assignments(courseId, 'all').find((a) => a.extKey === 'work')?.missingAt).toBe(missing);
+    expect(store.whatsNew(studentId).items[0]?.kind).toBe('now_missing');
+    put('work', 'scored', '2026-09-21T03:00:00.000Z', 4);
+    expect(store.assignments(courseId, 'all').find((a) => a.extKey === 'work')?.missingAt).toBeNull();
+    expect(store.whatsNew(studentId).items[0]?.kind).toBe('rescored');
+    put('work', 'missing', '2026-09-21T04:00:00.000Z', 4);
+    expect(store.whatsNew(studentId).items[0]?.kind).toBe('now_missing');
+    expect(store.assignments(courseId, 'all').find((a) => a.extKey === 'work')?.missingAt).toBe('2026-09-21T04:00:00.000Z');
+  });
+
+  it('prefers arrival then missing over score changes, and excludes stale and bootstrap work', () => {
+    const { studentId, courseId, put } = setup();
+    const at = '2026-09-21T00:00:00.000Z';
+    const arrival = put('arrived', 'missing', at);
+    expect(store.assignments(courseId, 'all').find((a) => a.id === arrival.id)?.missingAt).toBe(at);
+    put('older', 'scored', '2026-09-20T00:00:00.000Z', 2);
+    put('older', 'missing', at, 3);
+    expect(store.whatsNew(studentId).items.map((item) => [item.assignment.title, item.kind])).toEqual([
+      // Newly missing leads even though the arrival is equally recent.
+      ['older', 'now_missing'], ['arrived', 'new_assignment'],
+    ]);
+    const db = (store as unknown as { db: ReturnType<typeof openDatabase> }).db;
+    db.prepare('UPDATE assignments SET stale = 1 WHERE id = ?').run(arrival.id);
+    expect(store.whatsNew(studentId).items.map((item) => item.assignment.title)).toEqual(['older']);
+    expect(store.whatsNew(studentId).items[0]?.assignment.missingAt).toBe(at);
+  });
+
+  it('does not call bootstrap missing work new and replaces a resolved item with a new score', () => {
+    const at = '2026-09-20T00:00:00.000Z';
+    const studentId = store.upsertStudent({ parentvueId: 'p', name: 'Aiden', school: 'Odle' }, at).id;
+    const courseId = store.upsertCourse({ studentId, schoolYear: YEAR, title: 'Science' }, at).id;
+    store.upsertAssignment({ courseId, extKey: 'bootstrap', title: 'Bootstrap', status: 'missing' }, at);
+    expect(store.whatsNew(studentId)).toEqual({ at: null, since: null, items: [] });
+    store.upsertAssignment({ courseId, extKey: 'work', title: 'Work', status: 'scored' }, at);
+    store.upsertAssignment({ courseId, extKey: 'work', title: 'Work', status: 'missing' }, '2026-09-21T00:00:00.000Z');
+    expect(store.whatsNew(studentId).items.map((item) => item.kind)).toEqual(['now_missing']);
+    store.upsertAssignment({ courseId, extKey: 'work', title: 'Work', status: 'scored', score: 3, scoreRaw: '3' }, '2026-09-21T01:00:00.000Z');
+    expect(store.whatsNew(studentId).items.map((item) => item.kind)).toEqual(['new_score']);
+    expect(store.assignments(courseId, 'all').find((a) => a.extKey === 'work')?.missingAt).toBeNull();
+  });
+
+  it('excludes a stale missing transition from the anchor and items', () => {
+    const { studentId, courseId, put } = setup();
+    const old = put('old', 'scored', '2026-09-20T00:00:00.000Z');
+    put('old', 'missing', '2026-09-21T00:00:00.000Z');
+    const db = (store as unknown as { db: ReturnType<typeof openDatabase> }).db;
+    db.prepare('UPDATE assignments SET stale = 1 WHERE id = ?').run(old.id);
+    expect(store.whatsNew(studentId)).toEqual({ at: null, since: null, items: [] });
+    expect(store.assignments(courseId, 'all').find((a) => a.id === old.id)?.missingAt).toBe('2026-09-21T00:00:00.000Z');
   });
 });

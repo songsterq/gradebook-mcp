@@ -377,6 +377,24 @@ describe('multi-period course merging', () => {
     expect(store.assignments(cid, 'all')[0]).not.toHaveProperty('history');
   });
 
+  it('sets missing_at once when two periods list the same newly missing assignment', () => {
+    const store = freshStore();
+    const shared = work('shared', 'Shared Quiz');
+    const initial = book([{ title: 'Science', marks: [mark(0, [shared]), mark(1, [shared])] }], [0, 1]);
+    const first = diffIntoStore(store, { child, info: undefined, gradebook: initial }, NOW.toISOString(), '2026-09-13');
+    const missing = work('shared', 'Shared Quiz', 'missing');
+    const changed = book([{ title: 'Science', marks: [mark(0, [missing]), mark(1, [missing])] }], [0, 1]);
+    const at = '2026-09-14T12:00:00.000Z';
+    const second = diffIntoStore(store, { child, info: undefined, gradebook: changed }, at, '2026-09-14');
+    const cid = store.courses(store.resolveTerm(first.studentId, '2026-2027', 'Quarter 1').id)[0]!.id;
+    expect(second.newMissing).toBe(1);
+    expect(store.assignments(cid, 'all')[0]?.missingAt).toBe(at);
+    const third = diffIntoStore(store, { child, info: undefined, gradebook: changed }, '2026-09-15T12:00:00.000Z', '2026-09-15');
+    expect(third.newMissing).toBe(0);
+    expect(store.assignments(cid, 'all')[0]?.missingAt).toBe(at);
+    expect(store.whatsNew(first.studentId).items.map((item) => item.kind)).toEqual(['now_missing']);
+  });
+
   it('keeps shared work live until every complete period drops it', () => {
     const store = freshStore();
     const shared = work('shared', 'Shared Quiz');
@@ -687,7 +705,7 @@ describe('logic helpers', () => {
         id: 'asn_x', courseId: 'crs_y', extKey: '1', title: 'Syllabus Signature',
         category: 'Homework', dueDate: '2026-09-11', pointsPossible: 10,
         score: null, scoreRaw: null, scoreLetter: null, status: 'missing', notes: null,
-        firstSeenAt: NOW.toISOString(), lastSeenAt: NOW.toISOString(), scoredAt: null, stale: false,
+        firstSeenAt: NOW.toISOString(), lastSeenAt: NOW.toISOString(), scoredAt: null, missingAt: NOW.toISOString(), stale: false,
         studentId: 'stu_a', studentName: 'Aiden Chien', courseTitle: 'Math', termLabel: '2026-2027 · Q1',
       }],
       'Aiden Chien',

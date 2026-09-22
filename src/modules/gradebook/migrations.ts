@@ -350,4 +350,14 @@ ALTER TABLE assignments ADD COLUMN scored_at TEXT;
       }
     },
   },
+  {
+    version: 6,
+    up(db) {
+      db.exec(`
+ALTER TABLE assignments ADD COLUMN missing_at TEXT;
+UPDATE assignments SET missing_at = first_seen_at
+WHERE status IN ('missing', 'incomplete', 'late');
+`);
+    },
+  },
 ];

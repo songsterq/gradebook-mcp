@@ -90,6 +90,7 @@ export interface Assignment {
   firstSeenAt: string;
   lastSeenAt: string;
   scoredAt: string | null;
+  missingAt: string | null;
   history?: ScorePoint[];
   stale: boolean;
 }
@@ -105,7 +106,7 @@ export interface ScorePoint {
 export type ScoreEvent = 'new_score' | 'rescored' | 'cleared';
 
 export interface WhatsNewItem {
-  kind: 'new_assignment' | 'new_score' | 'rescored';
+  kind: 'new_assignment' | 'now_missing' | 'new_score' | 'rescored';
   assignment: Assignment;
   courseId: string;
   courseTitle: string;

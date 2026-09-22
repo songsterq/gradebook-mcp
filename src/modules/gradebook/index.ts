@@ -155,7 +155,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_overview',
         {
           title: 'Gradebook overview',
-          description: 'Every student, their current term, per-course grades with missing counts, and what\'s new: assignments and scores that arrived in the 24 hours before the latest change. Start here for "anything new?"',
+          description: 'Every student, their current term, per-course grades with missing counts, and what\'s new: new assignments, scores, and missing work in the 24 hours before the latest change. Start here for "anything new?"',
           inputSchema: {},
           annotations: { readOnlyHint: true, openWorldHint: false },
         },
@@ -219,14 +219,16 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         },
         withAudit(ctx.logger, ctx.identity, 'gradebook_assignments', ({ course, status }) => {
           const { course: resolved, term, student } = store.resolveCourse(course);
-          const newIds = new Set(store.whatsNew(student.id).items.map((item) => item.assignment.id));
+          const news = store.whatsNew(student.id).items;
+          const newIds = new Set(news.map((item) => item.assignment.id));
+          const newlyMissingIds = new Set(news.filter((item) => item.kind === 'now_missing').map((item) => item.assignment.id));
           const assignments = store.assignments(resolved.id, status).map((assignment) => ({
             ...assignment,
             new: newIds.has(assignment.id),
           }));
           return textResult(
             { student, term: termLabel(term), course: resolved, status, assignments },
-            renderAssignments(resolved, assignments, status),
+            renderAssignments(resolved, assignments, status, newlyMissingIds),
           );
         }),
       );
@@ -235,7 +237,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_missing',
         {
           title: 'Missing work',
-          description: 'Consolidated missing/incomplete/late work across all courses — the view ParentVUE lacks. Omit student for all students.',
+          description: 'Consolidated missing/incomplete/late work across all courses — the view ParentVUE lacks; rows flag work that newly went missing. Omit student for all students.',
           inputSchema: {
             student: studentRef.optional(),
           },
@@ -243,9 +245,15 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         },
         withAudit(ctx.logger, ctx.identity, 'gradebook_missing', ({ student }) => {
           const resolved = student === undefined ? undefined : store.resolveStudent(student);
-          const items = store.missing(resolved?.id);
+          const newsByStudent = new Map(
+            (resolved ? [resolved] : store.listStudents()).map((entry) => [entry.id, store.whatsNew(entry.id).items]),
+          );
+          const newlyMissingIds = new Set([...newsByStudent.values()].flat()
+            .filter((item) => item.kind === 'now_missing').map((item) => item.assignment.id));
+          const newIds = new Set([...newsByStudent.values()].flat().map((item) => item.assignment.id));
+          const items = store.missing(resolved?.id).map((item) => ({ ...item, new: newIds.has(item.id) }));
           const scope = resolved ? resolved.name : 'all students';
-          return textResult({ student: resolved ?? null, items }, renderMissing(items, scope));
+          return textResult({ student: resolved ?? null, items }, renderMissing(items, scope, newlyMissingIds));
         }),
       );
 

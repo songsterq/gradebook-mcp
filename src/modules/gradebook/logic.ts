@@ -114,8 +114,10 @@ export interface OverviewStudent {
   whatsNew: WhatsNew;
 }
 
-export function whatsNewLabel(kind: WhatsNewItem['kind']): string {
-  return kind === 'new_assignment' ? 'new assignment' : kind === 'new_score' ? 'new score' : 'score changed';
+export function whatsNewLabel(kind: WhatsNewItem['kind'], status: Assignment['status']): string {
+  return kind === 'new_assignment' ? 'new assignment'
+    : kind === 'now_missing' ? `marked ${statusLabel(status).toLowerCase()}`
+    : kind === 'new_score' ? 'new score' : 'score changed';
 }
 
 export function renderOverview(students: OverviewStudent[], timeZone?: string): string {
@@ -138,7 +140,7 @@ export function renderOverview(students: OverviewStudent[], timeZone?: string): 
     if (whatsNew.since && whatsNew.items.length > 0) {
       lines.push(`What's new since ${formatTimestamp(whatsNew.since, timeZone)}`);
       for (const item of whatsNew.items) {
-        lines.push(`- ${item.assignment.title} (${item.courseTitle}) · ${whatsNewLabel(item.kind)} · ${describeScore(item.assignment)}`);
+        lines.push(`- ${item.kind === 'now_missing' ? '⚠️ ' : ''}${item.assignment.title} (${item.courseTitle}) · ${whatsNewLabel(item.kind, item.assignment.status)} · ${describeScore(item.assignment)}`);
       }
     }
   }
@@ -171,7 +173,7 @@ export function renderCourses(student: Student, term: Term, courses: Course[]): 
   return lines.join('\n');
 }
 
-export function renderAssignments(course: Course, assignments: (Assignment & { new?: boolean })[], filter: string): string {
+export function renderAssignments(course: Course, assignments: (Assignment & { new?: boolean })[], filter: string, newlyMissingIds: ReadonlySet<string> = new Set()): string {
   const lines = [`## ${course.title} — ${filter}`];
   if (assignments.length === 0) {
     lines.push('Nothing here.');
@@ -184,13 +186,13 @@ export function renderAssignments(course: Course, assignments: (Assignment & { n
     const trail = a.history ? ` · was ${describeScoreTrail(a.history.slice(0, -1))}` : '';
     const fresh = a.new ? ' · new' : '';
     lines.push(
-      `- ${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${trail}${due}${category}${stale}${fresh}`,
+      `- ${newlyMissingIds.has(a.id) ? '⚠️ ' : ''}${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${trail}${due}${category}${stale}${fresh}`,
     );
   }
   return lines.join('\n');
 }
 
-export function renderMissing(items: MissingAssignment[], scope: string): string {
+export function renderMissing(items: (MissingAssignment & { new?: boolean })[], scope: string, newlyMissingIds: ReadonlySet<string> = new Set()): string {
   const lines = [`## Missing work — ${scope}`];
   if (items.length === 0) {
     lines.push('Nothing missing. 🎉');
@@ -199,7 +201,7 @@ export function renderMissing(items: MissingAssignment[], scope: string): string
   for (const a of items) {
     const due = a.dueDate ? ` · due ${a.dueDate}` : ' · no due date';
     lines.push(
-      `- **${a.title}** (${a.courseTitle}, ${a.studentName})${due} · ${a.category ?? 'no category'}`,
+      `- ${newlyMissingIds.has(a.id) ? '⚠️ ' : ''}**${a.title}** (${a.courseTitle}, ${a.studentName})${due} · ${a.category ?? 'no category'}${a.new ? ' · new' : ''}`,
     );
   }
   return lines.join('\n');

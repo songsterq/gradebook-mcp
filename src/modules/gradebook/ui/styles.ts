@@ -93,7 +93,12 @@ export const GRADEBOOK_STYLES = `
   padding: .55rem 1rem; border-bottom: 1px solid color-mix(in srgb, var(--gb-accent) 25%, var(--gb-border)); font-size: .875rem;
 }
 .gb-whats-new li:last-child { border-bottom: 0; }
+.gb-whats-new li[data-kind="now_missing"] { background: color-mix(in srgb, var(--gb-bad-bg) 70%, transparent); }
 .gb-whats-new-title { font-weight: 650; color: var(--gb-text); }
+.gb-whats-new li[data-kind="now_missing"] .gb-whats-new-kind {
+  padding: .1rem .4rem; border-radius: .35rem;
+  background: var(--gb-bad-bg); color: var(--gb-bad-fg);
+}
 .gb-whats-new-course { color: var(--gb-muted); }
 .gb-whats-new-kind { color: var(--gb-accent); }
 .gb-whats-new-score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--gb-text); }
@@ -176,6 +181,10 @@ export const GRADEBOOK_STYLES = `
 .gb-new-dot {
   display: inline-block; width: .45rem; height: .45rem; margin-right: .4rem;
   border-radius: 50%; background: var(--gb-accent); vertical-align: middle;
+}
+.gb-warning-icon {
+  display: inline-block; width: 1em; height: 1em; margin-right: .4rem;
+  color: var(--gb-bad-fg); vertical-align: -.1em; flex: none;
 }
 .gb-date { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--gb-muted); }
 .gb-cat { color: var(--gb-muted); }

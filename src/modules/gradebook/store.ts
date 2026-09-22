@@ -123,6 +123,7 @@ function toAssignment(row: RawRow): Assignment {
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
     scoredAt: str(row['scored_at']),
+    missingAt: str(row['missing_at']),
     stale: Number(row['stale']) === 1,
   };
 }
@@ -350,52 +351,65 @@ export class GradebookStore {
   }
 
   whatsNew(studentId: string): WhatsNew {
-    const anchor = this.db.prepare(`
+    const eventsCte = `
       WITH cutoff AS (
         SELECT MIN(a.first_seen_at) AS time
         FROM assignments a JOIN courses c ON c.id = a.course_id
         WHERE c.student_id = ?
+      ), eligible AS (
+        SELECT a.* FROM assignments a JOIN courses c ON c.id = a.course_id
+        WHERE c.student_id = ? AND a.stale = 0
       ), events AS (
-        SELECT a.first_seen_at AS time
-        FROM assignments a JOIN courses c ON c.id = a.course_id, cutoff
-        WHERE c.student_id = ? AND a.stale = 0 AND a.first_seen_at > cutoff.time
+        SELECT a.id AS assignment_id, a.first_seen_at AS time, 'new_assignment' AS kind
+        FROM eligible a, cutoff WHERE a.first_seen_at > cutoff.time
         UNION ALL
-        SELECT a.scored_at AS time
-        FROM assignments a JOIN courses c ON c.id = a.course_id, cutoff
-        WHERE c.student_id = ? AND a.stale = 0 AND a.scored_at > cutoff.time
+        SELECT a.id, a.missing_at, 'now_missing'
+        FROM eligible a, cutoff WHERE a.missing_at > cutoff.time
+          AND a.missing_at <> a.first_seen_at
+        UNION ALL
+        SELECT a.id, a.scored_at, 'score'
+        FROM eligible a, cutoff WHERE a.scored_at > cutoff.time
           AND a.scored_at <> a.first_seen_at
-      )
-      SELECT (SELECT time FROM cutoff) AS cutoff, MAX(time) AS at FROM events
-    `).get(studentId, studentId, studentId) as RawRow;
+      )`;
+    const anchor = this.db.prepare(`
+      ${eventsCte}
+      SELECT MAX(time) AS at FROM events
+    `).get(studentId, studentId) as RawRow;
     const at = str(anchor['at']);
     if (!at) return { at: null, since: null, items: [] };
-    const cutoff = String(anchor['cutoff']);
     const since = new Date(Date.parse(at) - 24 * 60 * 60 * 1000).toISOString();
     const rows = this.db.prepare(`
+      ${eventsCte}, window_events AS (
+        SELECT assignment_id, MAX(time) AS event_time,
+          MAX(kind = 'new_assignment') AS arrived,
+          MAX(kind = 'now_missing') AS became_missing
+        FROM events WHERE time > ? GROUP BY assignment_id
+      )
       SELECT a.*, c.title AS course_title,
         (SELECT COUNT(*) FROM assignment_scores s
          WHERE s.assignment_id = a.id
            AND (s.score IS NOT NULL OR TRIM(COALESCE(s.score_raw, '')) <> '')) AS score_count,
-        CASE WHEN a.scored_at > a.first_seen_at AND a.scored_at > ? AND a.scored_at > ?
-          THEN a.scored_at ELSE a.first_seen_at END AS event_time
-      FROM assignments a
+        e.event_time, e.arrived, e.became_missing
+      FROM window_events e
+      JOIN assignments a ON a.id = e.assignment_id
       JOIN courses c ON c.id = a.course_id
-      WHERE c.student_id = ? AND a.stale = 0
-        AND ((a.first_seen_at > ? AND a.first_seen_at > ?)
-          OR (a.scored_at > ? AND a.scored_at > ? AND a.scored_at <> a.first_seen_at))
       ORDER BY event_time DESC, c.title, a.title
-    `).all(since, cutoff, studentId, since, cutoff, since, cutoff) as RawRow[];
+    `).all(studentId, studentId, since) as RawRow[];
     return {
       at,
       since,
+      // Newly missing work first, then newest event first: the one kind of news that
+      // asks a parent to act leads on every surface, not just the dashboard panel.
+      // Array.prototype.sort is stable, so the SQL order holds within each group.
       items: rows.map((row) => ({
-        kind: String(row['first_seen_at']) > since && String(row['first_seen_at']) > cutoff
+        kind: Number(row['arrived']) === 1
           ? 'new_assignment' as const
+          : Number(row['became_missing']) === 1 ? 'now_missing' as const
           : Number(row['score_count']) >= 2 ? 'rescored' as const : 'new_score' as const,
         assignment: toAssignment(row),
         courseId: String(row['course_id']),
         courseTitle: String(row['course_title']),
-      })),
+      })).sort((a, b) => Number(b.kind === 'now_missing') - Number(a.kind === 'now_missing')),
     };
   }
 
@@ -639,7 +653,7 @@ export class GradebookStore {
           .prepare(
             `UPDATE assignments SET title = ?, category = ?, due_date = ?, points_possible = ?,
              score = ?, score_raw = ?, score_letter = ?, status = ?, notes = ?,
-             last_seen_at = ?, scored_at = ?, stale = 0 WHERE id = ?`,
+             last_seen_at = ?, scored_at = ?, missing_at = ?, stale = 0 WHERE id = ?`,
           )
           .run(
             input.title,
@@ -653,6 +667,7 @@ export class GradebookStore {
             input.notes ?? null,
             now,
             scoreEvent ? (after === null ? null : now) : str(existing['scored_at']),
+            isActionable ? (wasActionable ? str(existing['missing_at']) : now) : null,
             id,
           );
         if (scoreEvent) this.appendAssignmentScore(id, input, after === null, now);
@@ -662,8 +677,8 @@ export class GradebookStore {
       this.db
         .prepare(
           `INSERT INTO assignments (id, course_id, ext_key, title, category, due_date, points_possible,
-           score, score_raw, score_letter, status, notes, first_seen_at, last_seen_at, scored_at, stale)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+           score, score_raw, score_letter, status, notes, first_seen_at, last_seen_at, scored_at, missing_at, stale)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
         )
         .run(
           id,
@@ -681,6 +696,7 @@ export class GradebookStore {
           now,
           now,
           scoreKey(input.score ?? null, input.scoreRaw ?? null) === null ? null : now,
+          (ACTIONABLE_STATUSES as string[]).includes(input.status) ? now : null,
         );
       const scoreEvent = scoreKey(input.score ?? null, input.scoreRaw ?? null) === null ? null : 'new_score';
       if (scoreEvent) this.appendAssignmentScore(id, input, false, now);
