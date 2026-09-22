@@ -80,12 +80,17 @@ export const GRADEBOOK_STYLES = `
 .gb-year { margin-left: .2rem; font-size: .8125rem; color: var(--gb-muted); }
 
 /* --- What's new -------------------------------------------------------- */
-.gb-whats-new { margin-bottom: 1.25rem; }
+/* Tinted with the info tokens so the panel stands out from the course cards in both
+   themes. Qualified with .gb-panel so it outranks that rule, which comes later. */
+.gb-panel.gb-whats-new {
+  margin-bottom: 1.25rem; background: var(--gb-info-bg);
+  border-color: color-mix(in srgb, var(--gb-accent) 35%, var(--gb-border));
+}
 .gb-whats-new h2 { margin: 0; padding: .8rem 1rem; font-size: 1rem; color: var(--gb-text); }
-.gb-whats-new ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--gb-border); }
+.gb-whats-new ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid color-mix(in srgb, var(--gb-accent) 25%, var(--gb-border)); }
 .gb-whats-new li {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .7rem;
-  padding: .55rem 1rem; border-bottom: 1px solid var(--gb-border); font-size: .875rem;
+  padding: .55rem 1rem; border-bottom: 1px solid color-mix(in srgb, var(--gb-accent) 25%, var(--gb-border)); font-size: .875rem;
 }
 .gb-whats-new li:last-child { border-bottom: 0; }
 .gb-whats-new-title { font-weight: 650; color: var(--gb-text); }
