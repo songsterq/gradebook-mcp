@@ -43,6 +43,23 @@ export function schoolYearForDate(ymd: string | undefined, fallback: Date = new 
   return month >= 8 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
 }
 
+/**
+ * Human-friendly timestamp ("Sep 22, 2026, 3:48 PM") in the server's zone, shared
+ * by the dashboard and the MCP text so both read the same. Without a zone, or with
+ * one Intl doesn't recognise, it falls back to the UTC ISO text minus milliseconds
+ * rather than failing the whole render.
+ */
+export function formatTimestamp(iso: string, timeZone?: string): string {
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat('en-US', { timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
+    } catch {
+      // Fall through to UTC text.
+    }
+  }
+  return iso.replace('T', ' ').replace(/\.\d+(?=Z$)/, '');
+}
+
 export function termLabel(term: Term): string {
   return `${term.schoolYear} · ${term.reportingPeriod}`;
 }
@@ -101,7 +118,7 @@ export function whatsNewLabel(kind: WhatsNewItem['kind']): string {
   return kind === 'new_assignment' ? 'new assignment' : kind === 'new_score' ? 'new score' : 'score changed';
 }
 
-export function renderOverview(students: OverviewStudent[]): string {
+export function renderOverview(students: OverviewStudent[], timeZone?: string): string {
   if (students.length === 0) {
     return 'No students on file yet. Run gradebook_sync to pull ParentVUE.';
   }
@@ -118,8 +135,8 @@ export function renderOverview(students: OverviewStudent[]): string {
         lines.push(`- ${course.title}: ${describeGrade(course)}${missing} (${course.id})`);
       }
     }
-    if (whatsNew.items.length > 0) {
-      lines.push(`What's new since ${whatsNew.since}`);
+    if (whatsNew.since && whatsNew.items.length > 0) {
+      lines.push(`What's new since ${formatTimestamp(whatsNew.since, timeZone)}`);
       for (const item of whatsNew.items) {
         lines.push(`- ${item.assignment.title} (${item.courseTitle}) · ${whatsNewLabel(item.kind)} · ${describeScore(item.assignment)}`);
       }

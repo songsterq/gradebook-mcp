@@ -412,7 +412,9 @@ describe('sticky whatsNew', () => {
     const overview = () => renderOverview([{ student, term: null, courses: [], whatsNew: store.whatsNew(studentId) }]);
     expect(overview()).not.toContain("What's new");
     add('Lab', '2026-09-21T00:00:00.000Z');
-    expect(overview()).toContain("What's new since 2026-09-20T00:00:00.000Z");
+    expect(overview()).toContain("What's new since 2026-09-20 00:00:00Z");
+    const zoned = renderOverview([{ student, term: null, courses: [], whatsNew: store.whatsNew(studentId) }], 'America/Los_Angeles');
+    expect(zoned).toContain("What's new since Sep 19, 2026, 5:00 PM");
     expect(overview()).toContain('Lab (Science) · new assignment · —');
   });
 });

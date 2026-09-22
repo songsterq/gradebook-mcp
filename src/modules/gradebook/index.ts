@@ -155,7 +155,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_overview',
         {
           title: 'Gradebook overview',
-          description: 'Every student, their current term, and per-course grades with missing counts.',
+          description: 'Every student, their current term, per-course grades with missing counts, and what\'s new: assignments and scores that arrived in the 24 hours before the latest change. Start here for "anything new?"',
           inputSchema: {},
           annotations: { readOnlyHint: true, openWorldHint: false },
         },
@@ -164,7 +164,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
             const term = store.latestTerm(student.id);
             return { student, term, courses: term ? store.courses(term.id) : [], whatsNew: store.whatsNew(student.id) };
           });
-          return textResult({ students }, renderOverview(students));
+          return textResult({ students }, renderOverview(students, config.tz));
         }),
       );
 
@@ -210,7 +210,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_assignments',
         {
           title: 'Gradebook assignments',
-          description: 'Assignments for a course with due date, category, score, and status.',
+          description: 'A course\'s assignments for the whole school year, newest first, with due date, category, score, and status. Rows flag new work; a score that changed carries its history.',
           inputSchema: {
             course: courseRef,
             status: assignmentStatusFilter.default('missing'),
@@ -253,7 +253,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_trend',
         {
           title: 'Grade trend',
-          description: 'Grade history for a course within its term.',
+          description: 'Grade history for a course in its current reporting period.',
           inputSchema: { course: courseRef },
           annotations: { readOnlyHint: true, openWorldHint: false },
         },

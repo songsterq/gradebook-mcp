@@ -1,6 +1,6 @@
 import { html } from '../../../ui/html.js';
 import type { Html } from '../../../ui/html.js';
-import { describeGrade, describeScore, describeScoreTrail, statusLabel, termLabel, whatsNewLabel } from '../logic.js';
+import { describeGrade, describeScore, describeScoreTrail, formatTimestamp, statusLabel, termLabel, whatsNewLabel } from '../logic.js';
 import type { Assignment, Course, MissingAssignment, Student, Term, WhatsNew } from '../schema.js';
 
 export interface CourseCardModel {
@@ -82,22 +82,10 @@ function renderScore(a: Assignment): Html {
   return html`${body}${trail}`;
 }
 
-/** Human-friendly timestamp in the server's zone, shared by every timestamp the page shows. */
-function timestampLabel(iso: string, timeZone?: string): string {
-  if (timeZone) {
-    try {
-      return new Intl.DateTimeFormat('en-US', { timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
-    } catch {
-      // An unrecognised TZ must not take the dashboard down; fall through to UTC text.
-    }
-  }
-  return iso.replace('T', ' ').replace(/\.\d+(?=Z$)/, '');
-}
-
 function renderWhatsNew(whatsNew: WhatsNew, timeZone?: string): Html | null {
   if (whatsNew.items.length === 0 || !whatsNew.since) return null;
   return html`<section class="gb-whats-new gb-panel" aria-label="What's new">
-    <h2>New since <time datetime="${whatsNew.since}">${timestampLabel(whatsNew.since, timeZone)}</time></h2>
+    <h2>New since <time datetime="${whatsNew.since}">${formatTimestamp(whatsNew.since, timeZone)}</time></h2>
     <ul>${whatsNew.items.map((item) => html`<li>
       <span class="gb-whats-new-title">${item.assignment.title}</span>
       <span class="gb-whats-new-course">${item.courseTitle}</span>
@@ -303,7 +291,7 @@ export function renderDashboardPage(model: DashboardPageModel): Html {
             : html`<div class="gb-panel"><p class="gb-note">No courses this term.</p></div>`}`}
       `}
     <div class="gb-foot">
-      <p>${model.lastSyncAt ? html`Last synced <time datetime="${model.lastSyncAt}">${timestampLabel(model.lastSyncAt, model.timeZone)}</time>` : 'Never synced.'}</p>
+      <p>${model.lastSyncAt ? html`Last synced <time datetime="${model.lastSyncAt}">${formatTimestamp(model.lastSyncAt, model.timeZone)}</time>` : 'Never synced.'}</p>
       <p>${heading} · read-only snapshot of ParentVUE</p>
     </div>
   </main>`;
