@@ -237,20 +237,54 @@ export function parseReportingPeriods(traditionalGradebook: unknown): ReportingP
   });
 }
 
-/** Parse a points-possible value out of `pointPossible` or the `points` display string. */
+function finite(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** The `points` display string: "100 / 100" -> 100; "10 Points Possible" -> 10. */
+function pointsFromPointsField(pointsRaw: string | undefined): number | undefined {
+  if (!pointsRaw) return undefined;
+  const m = /\/\s*([\d.]+)\s*$/.exec(pointsRaw) ?? /^\s*([\d.]+)/.exec(pointsRaw);
+  return finite(m?.[1]);
+}
+
+/**
+ * The `displayScore` string the ParentVUE app itself prints: "3.5 out of 4",
+ * "3.5 / 4". Only the denominator counts here — a leading number is the score,
+ * not the total — which is why this can't reuse {@link pointsFromPointsField}.
+ */
+function pointsFromDisplayScore(displayScore: string | undefined): number | undefined {
+  if (!displayScore) return undefined;
+  return finite(/(?:\/|\bout\s+of\b)\s*([\d.]+)\s*$/i.exec(displayScore)?.[1]);
+}
+
+/** Rubric score types carry their ceiling in the name: "Rubric 0 - 4" -> 4. */
+function pointsFromScoreType(scoreType: string | undefined): number | undefined {
+  if (!scoreType) return undefined;
+  return finite(/rubric\D*[\d.]+\s*(?:-|–|to)\s*([\d.]+)/i.exec(scoreType)?.[1]);
+}
+
+/**
+ * Points possible, from whichever upstream field actually carries it. Bellevue
+ * posts rubric-scored work with `pointPossible` null and `points` empty while
+ * still showing "3.5 out of 4" in the app, so `displayScore` and the rubric
+ * range in `scoreType` are real sources, not guesses. A non-positive value is
+ * only accepted when nothing else offers a positive one: districts use 0 for
+ * "not set" far more often than for a genuinely 0-point assignment.
+ */
 function parsePointsPossible(entry: JsonRecord): { pointsPossible?: number; pointsRaw?: string } {
-  const direct = num(entry.pointPossible ?? entry.point);
   const pointsRaw = str(entry.points);
-  if (direct !== undefined) return { pointsPossible: direct, pointsRaw };
-  if (pointsRaw) {
-    // "100 / 100" / ".6 / 1" -> trailing number; "100 Points Possible" -> leading number.
-    const m = /\/\s*([\d.]+)\s*$/.exec(pointsRaw) ?? /^\s*([\d.]+)/.exec(pointsRaw);
-    if (m) {
-      const n = Number(m[1]);
-      if (Number.isFinite(n)) return { pointsPossible: n, pointsRaw };
-    }
-  }
-  return { pointsPossible: undefined, pointsRaw };
+  const candidates = [
+    num(entry.pointPossible ?? entry.point),
+    pointsFromPointsField(pointsRaw),
+    pointsFromDisplayScore(str(entry.displayScore)),
+    pointsFromScoreType(str(entry.scoreType)),
+  ];
+  const pointsPossible =
+    candidates.find((n) => n !== undefined && n > 0) ?? candidates.find((n) => n !== undefined);
+  return { pointsPossible, pointsRaw };
 }
 
 function parseAssignment(entry: JsonRecord): AssignmentSnapshot {

@@ -277,9 +277,12 @@ export class GradebookStore {
     } else if (filter === 'scored') {
       where += ` AND status = 'scored' AND stale = 0`;
     }
+    // Newest first, matching ParentVUE's own assignment list: what a parent
+    // wants to see on opening a course is what was just graded, not September.
+    // Undated rows sort last, where they can't push recent work off the top.
     return (
       this.db
-        .prepare(`SELECT * FROM assignments WHERE ${where} ORDER BY due_date IS NULL, due_date, title`)
+        .prepare(`SELECT * FROM assignments WHERE ${where} ORDER BY due_date IS NULL, due_date DESC, title`)
         .all(...params) as RawRow[]
     ).map(toAssignment);
   }

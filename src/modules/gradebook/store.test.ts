@@ -165,6 +165,20 @@ describe('GradebookStore', () => {
     expect(store.assignments(cid, 'scored')).toHaveLength(1);
   });
 
+  it('lists assignments newest-due first, undated last', () => {
+    const { id: sid } = store.upsertStudent({ parentvueId: 'p1', name: 'Aiden', school: 'Odle' }, NOW);
+    const { id: tid } = store.upsertTerm({ studentId: sid, schoolYear: '2026-2027', reportingPeriod: 'Q1', periodIndex: 0 }, NOW);
+    const { id: cid } = store.upsertCourse({ termId: tid, title: 'Science' }, NOW);
+    store.upsertAssignment({ courseId: cid, extKey: 'a1', title: 'Survey', status: 'scored', score: 3.5, dueDate: '2026-09-04' }, NOW);
+    store.upsertAssignment({ courseId: cid, extKey: 'a2', title: 'Summative', status: 'not_due', dueDate: '2026-11-06' }, NOW);
+    store.upsertAssignment({ courseId: cid, extKey: 'a3', title: 'Quiz 1', status: 'scored', score: 3.5, dueDate: '2026-09-18' }, NOW);
+    store.upsertAssignment({ courseId: cid, extKey: 'a4', title: 'No date', status: 'not_due' }, NOW);
+
+    expect(store.assignments(cid, 'all').map((a) => a.title)).toEqual([
+      'Summative', 'Quiz 1', 'Survey', 'No date',
+    ]);
+  });
+
   it('reports missing work across the latest term only', () => {
     const { id: sid } = store.upsertStudent({ parentvueId: 'p1', name: 'Aiden', school: 'Odle' }, NOW);
     const t1 = store.upsertTerm({ studentId: sid, schoolYear: '2025-2026', reportingPeriod: 'Q4', periodIndex: 3 }, NOW);
