@@ -158,6 +158,7 @@ export const GRADEBOOK_STYLES = `
 .gb-cat { color: var(--gb-muted); }
 .gb-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gb-score { font-weight: 650; }
+.gb-trail { display: block; margin-top: .15rem; color: var(--gb-muted); font-size: .75rem; font-weight: 400; }
 .gb-pct { margin-left: .3rem; font-size: .75rem; font-weight: 500; color: var(--gb-muted); }
 .gb-dash { color: var(--gb-muted); }
 .gb-empty { margin: 0; padding: .9rem 1rem; border-top: 1px solid var(--gb-border);

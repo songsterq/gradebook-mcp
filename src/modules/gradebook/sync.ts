@@ -91,6 +91,8 @@ export interface StudentSyncResult {
   courses: number;
   assignments: number;
   newMissing: number;
+  newScores: number;
+  rescored: number;
   staleMarked: number;
 }
 
@@ -171,6 +173,8 @@ export function diffIntoStore(
   let courses = 0;
   // Distinct rows, not listings: a cumulative period repeats its quarter's work.
   const assignmentIds = new Set<string>();
+  const newScoreIds = new Set<string>();
+  const rescoredIds = new Set<string>();
   let newMissing = 0;
   let staleMarked = 0;
   const completePeriods = new Set(gradebook.completePeriodIndexes ?? []);
@@ -246,6 +250,8 @@ export function diffIntoStore(
         );
         seenByTerm.get(termId)?.add(result.id);
         assignmentIds.add(result.id);
+        if (result.scoreEvent === 'new_score') newScoreIds.add(result.id);
+        if (result.scoreEvent === 'rescored') rescoredIds.add(result.id);
         if (result.becameActionable) newMissing += 1;
       }
     }
@@ -260,7 +266,7 @@ export function diffIntoStore(
   staleMarked += store.sweepStale(studentId);
   store.recomputeMissingCounts(studentId);
 
-  return { studentId, name: child.name, courses, assignments: assignmentIds.size, newMissing, staleMarked };
+  return { studentId, name: child.name, courses, assignments: assignmentIds.size, newMissing, newScores: newScoreIds.size, rescored: rescoredIds.size, staleMarked };
 }
 
 /**
@@ -332,6 +338,8 @@ export async function runSync(options: RunSyncOptions): Promise<{
         courses: s.courses,
         assignments: s.assignments,
         newMissing: s.newMissing,
+        newScores: s.newScores,
+        rescored: s.rescored,
       })),
       errors,
       durationMs,

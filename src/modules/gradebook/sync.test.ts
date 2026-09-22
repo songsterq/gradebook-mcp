@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { ParentVueClient } from '../../lib/parentvue/src/index.js';
 import { migrate, openDatabase } from '../../storage/sqlite.js';
-import { newId, renderMissing, renderOverview, schoolYearForDate } from './logic.js';
+import { newId, renderMissing, renderOverview, renderSyncSummary, schoolYearForDate } from './logic.js';
 import { MIGRATIONS } from './migrations.js';
 import { GradebookStore } from './store.js';
 import { createSyncGate, diffIntoStore, runSync } from './sync.js';
@@ -144,10 +144,13 @@ describe('runSync', () => {
     const first = await runSync({ client, store, trigger: 'mcp', now: NOW });
     expect(first.status).toBe('ok');
     expect(first.students).toHaveLength(2);
+    expect(first.students[0]).toMatchObject({ newScores: 1, rescored: 0 });
+    expect(store.lastSyncRun()?.detail).toMatchObject({ students: [{ newScores: 1, rescored: 0 }, { newScores: 0, rescored: 0 }] });
     expect(store.counts()).toMatchObject({ students: 2, terms: 2, courses: 2, assignments: 2 });
 
     const second = await runSync({ client, store, trigger: 'mcp', now: new Date('2026-09-14T12:00:00.000Z') });
     expect(second.status).toBe('ok');
+    expect(second.students[0]).toMatchObject({ newScores: 0, rescored: 0 });
     expect(store.counts()).toMatchObject({ students: 2, terms: 2, courses: 2, assignments: 2 });
 
     // One history entry per course: re-syncing unchanged data appends nothing.
@@ -155,6 +158,25 @@ describe('runSync', () => {
     const term = store.latestTerm(aiden.id)!;
     const course = store.courses(term.id)[0]!;
     expect(store.trend(course.id)).toHaveLength(1);
+  });
+
+  it('reports rescored assignments in the run detail and summary', async () => {
+    const initial = mockClient({ '0': { assignments: ASSIGNMENTS_V1 } });
+    await runSync({ client: initial, store, trigger: 'mcp', now: NOW });
+    const changed = ASSIGNMENTS_V1.map((row, index) => index === 0
+      ? { ...row, score: '4.0', displayScore: '4 out of 4' }
+      : row);
+    const result = await runSync({
+      client: mockClient({ '0': { assignments: changed } }), store, trigger: 'mcp',
+      now: new Date('2026-09-14T12:00:00.000Z'),
+    });
+    expect(result.students[0]).toMatchObject({ newScores: 0, rescored: 1 });
+    const summary = store.lastSyncRun()!;
+    expect(summary.detail).toMatchObject({ students: [{ newScores: 0, rescored: 1 }, { newScores: 0, rescored: 0 }] });
+    expect(renderSyncSummary(summary)).toContain('1 rescored');
+    expect(renderSyncSummary(summary)).not.toContain('new scores');
+    const initialRun = { ...summary, detail: { students: [{ name: 'Aiden', courses: 1, assignments: 1, newMissing: 0, newScores: 1, rescored: 0 }] } };
+    expect(renderSyncSummary(initialRun)).toContain('1 new scores');
   });
 
   it('marks vanished assignments stale and counts newly missing work', async () => {
@@ -340,6 +362,19 @@ describe('multi-period course merging', () => {
     const courseId = store.courses(q1.id)[0]!.id;
     expect(store.assignments(courseId, 'all').map((assignment) => assignment.extKey)).toEqual(['shared']);
     expect(store.trend(courseId)).toHaveLength(1);
+  });
+
+  it('counts a duplicated scored listing once in a run', () => {
+    const store = freshStore();
+    const shared = { ...work('shared', 'Shared Quiz'), score: 3.5, scoreRaw: '3.5', pointsPossible: 4 };
+    const snapshot = book([{ title: 'Science', marks: [mark(0, [shared]), mark(1, [shared])] }], [0, 1]);
+    const first = diffIntoStore(store, { child, info: undefined, gradebook: snapshot }, NOW.toISOString(), '2026-09-13');
+    const second = diffIntoStore(store, { child, info: undefined, gradebook: snapshot }, '2026-09-14T12:00:00.000Z', '2026-09-14');
+    expect(first).toMatchObject({ assignments: 1, newScores: 1, rescored: 0 });
+    expect(second).toMatchObject({ assignments: 1, newScores: 0, rescored: 0 });
+    const cid = store.courses(store.resolveTerm(first.studentId, '2026-2027', 'Quarter 1').id)[0]!.id;
+    expect(store.assignments(cid, 'all')[0]).toMatchObject({ scoredAt: NOW.toISOString(), firstSeenAt: NOW.toISOString() });
+    expect(store.assignments(cid, 'all')[0]).not.toHaveProperty('history');
   });
 
   it('keeps shared work live until every complete period drops it', () => {
@@ -652,7 +687,7 @@ describe('logic helpers', () => {
         id: 'asn_x', courseId: 'crs_y', extKey: '1', title: 'Syllabus Signature',
         category: 'Homework', dueDate: '2026-09-11', pointsPossible: 10,
         score: null, scoreRaw: null, scoreLetter: null, status: 'missing', notes: null,
-        firstSeenAt: NOW.toISOString(), lastSeenAt: NOW.toISOString(), stale: false,
+        firstSeenAt: NOW.toISOString(), lastSeenAt: NOW.toISOString(), scoredAt: null, stale: false,
         studentId: 'stu_a', studentName: 'Aiden Chien', courseTitle: 'Math', termLabel: '2026-2027 · Q1',
       }],
       'Aiden Chien',

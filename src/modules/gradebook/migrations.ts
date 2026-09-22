@@ -1,6 +1,6 @@
 import type { SQLInputValue } from 'node:sqlite';
 import type { Migration } from '../../storage/sqlite.js';
-import { newId } from './logic.js';
+import { newId, scoreKey } from './logic.js';
 
 type Row = Record<string, unknown>;
 
@@ -314,6 +314,40 @@ CREATE INDEX grade_history_mark ON grade_history(mark_id, observed_at);
       // check above is authoritative; clearing deferred mode discards those
       // obsolete counters before the runner commits.
       db.exec('PRAGMA defer_foreign_keys = OFF');
+    },
+  },
+  {
+    version: 5,
+    up(db) {
+      db.exec(`
+CREATE TABLE assignment_scores (
+  id              INTEGER PRIMARY KEY,
+  assignment_id   TEXT NOT NULL REFERENCES assignments(id),
+  observed_at     TEXT NOT NULL,
+  score           REAL,
+  score_raw       TEXT,
+  score_letter    TEXT,
+  points_possible REAL
+) STRICT;
+CREATE INDEX assignment_scores_assignment ON assignment_scores(assignment_id, observed_at);
+
+ALTER TABLE assignments ADD COLUMN scored_at TEXT;
+`);
+      const insert = db.prepare(`
+        INSERT INTO assignment_scores
+          (assignment_id, observed_at, score, score_raw, score_letter, points_possible)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      const markScored = db.prepare('UPDATE assignments SET scored_at = first_seen_at WHERE id = ?');
+      for (const row of db.prepare('SELECT * FROM assignments').all() as Row[]) {
+        if (scoreKey(row['score'] as number | null, row['score_raw'] as string | null) === null) continue;
+        insert.run(
+          String(row['id']), String(row['first_seen_at']),
+          sqlValue(row['score'] ?? null), sqlValue(row['score_raw'] ?? null),
+          sqlValue(row['score_letter'] ?? null), sqlValue(row['points_possible'] ?? null),
+        );
+        markScored.run(String(row['id']));
+      }
     },
   },
 ];

@@ -1,6 +1,6 @@
 import { html } from '../../../ui/html.js';
 import type { Html } from '../../../ui/html.js';
-import { describeGrade, describeScore, statusLabel, termLabel } from '../logic.js';
+import { describeGrade, describeScore, describeScoreTrail, statusLabel, termLabel } from '../logic.js';
 import type { Assignment, Course, MissingAssignment, Student, Term } from '../schema.js';
 
 export interface CourseCardModel {
@@ -71,10 +71,13 @@ function renderDate(ymd: string | null): Html {
 function renderScore(a: Assignment): Html {
   const text = describeScore(a);
   const body = text === '—' ? html`<span class="gb-dash">—</span>` : html`<span class="gb-score">${text}</span>`;
+  const trail = a.history
+    ? html`<span class="gb-trail" title="${a.history.map((point) => point.observedAt.slice(0, 10)).join(' → ')}">${describeScoreTrail(a.history)}</span>`
+    : null;
   if (a.score !== null && a.score !== undefined && a.pointsPossible) {
-    return html`${body}<span class="gb-pct">${Math.round((a.score / a.pointsPossible) * 100)}%</span>`;
+    return html`${body}<span class="gb-pct">${Math.round((a.score / a.pointsPossible) * 100)}%</span>${trail}`;
   }
-  return body;
+  return html`${body}${trail}`;
 }
 
 const STATUS_TONE: Record<string, string> = {

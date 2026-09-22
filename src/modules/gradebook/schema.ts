@@ -89,8 +89,20 @@ export interface Assignment {
   notes: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
+  scoredAt: string | null;
+  history?: ScorePoint[];
   stale: boolean;
 }
+
+export interface ScorePoint {
+  observedAt: string;
+  score: number | null;
+  scoreRaw: string | null;
+  scoreLetter: string | null;
+  pointsPossible: number | null;
+}
+
+export type ScoreEvent = 'new_score' | 'rescored' | 'cleared';
 
 export interface GradePoint {
   observedAt: string;

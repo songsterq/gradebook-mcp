@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { withTransaction } from '../../storage/sqlite.js';
 import { GradebookError } from './errors.js';
-import { newId } from './logic.js';
+import { newId, scoreKey } from './logic.js';
 import type {
   Assignment,
   AssignmentStatus,
@@ -10,6 +10,8 @@ import type {
   Course,
   GradePoint,
   MissingAssignment,
+  ScoreEvent,
+  ScorePoint,
   Student,
   SyncRunSummary,
   SyncTrigger,
@@ -119,6 +121,7 @@ function toAssignment(row: RawRow): Assignment {
     notes: str(row['notes']),
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
+    scoredAt: str(row['scored_at']),
     stale: Number(row['stale']) === 1,
   };
 }
@@ -309,11 +312,40 @@ export class GradebookStore {
     // Newest first, matching ParentVUE's own assignment list: what a parent
     // wants to see on opening a course is what was just graded, not September.
     // Undated rows sort last, where they can't push recent work off the top.
-    return (
-      this.db
-        .prepare(`SELECT a.* FROM ${from} WHERE ${where} ORDER BY a.due_date IS NULL, a.due_date DESC, a.title`)
-        .all(...params) as RawRow[]
-    ).map(toAssignment);
+    const assignments = (this.db
+      .prepare(`SELECT a.* FROM ${from} WHERE ${where} ORDER BY a.due_date IS NULL, a.due_date DESC, a.title`)
+      .all(...params) as RawRow[]).map(toAssignment);
+    if (assignments.length === 0) return assignments;
+    const ids = assignments.map((assignment) => assignment.id);
+    const history = this.db.prepare(`
+      WITH changed AS (
+        SELECT assignment_id FROM assignment_scores
+        WHERE assignment_id IN (${ids.map(() => '?').join(',')})
+        GROUP BY assignment_id HAVING COUNT(*) > 1
+      )
+      SELECT s.assignment_id, s.observed_at, s.score, s.score_raw, s.score_letter, s.points_possible
+      FROM assignment_scores s
+      JOIN changed ON changed.assignment_id = s.assignment_id
+      ORDER BY s.observed_at, s.id
+    `).all(...ids) as RawRow[];
+    const byId = new Map<string, ScorePoint[]>();
+    for (const row of history) {
+      const id = String(row['assignment_id']);
+      const points = byId.get(id) ?? [];
+      points.push({
+        observedAt: String(row['observed_at']),
+        score: num(row['score']),
+        scoreRaw: str(row['score_raw']),
+        scoreLetter: str(row['score_letter']),
+        pointsPossible: num(row['points_possible']),
+      });
+      byId.set(id, points);
+    }
+    for (const assignment of assignments) {
+      const points = byId.get(assignment.id);
+      if (points) assignment.history = points;
+    }
+    return assignments;
   }
 
   /**
@@ -540,20 +572,23 @@ export class GradebookStore {
   upsertAssignment(
     input: UpsertAssignmentInput,
     now: string,
-  ): { id: string; created: boolean; becameActionable: boolean } {
+  ): { id: string; created: boolean; becameActionable: boolean; scoreEvent: ScoreEvent | null } {
     return withTransaction(this.db, () => {
       const existing = this.db
         .prepare('SELECT * FROM assignments WHERE course_id = ? AND ext_key = ?')
         .get(input.courseId, input.extKey) as RawRow | undefined;
       if (existing) {
         const id = String(existing['id']);
+        const before = scoreKey(num(existing['score']), str(existing['score_raw']));
+        const after = scoreKey(input.score ?? null, input.scoreRaw ?? null);
+        const scoreEvent: ScoreEvent | null = before === after ? null : after === null ? 'cleared' : before === null ? 'new_score' : 'rescored';
         const wasActionable = (ACTIONABLE_STATUSES as string[]).includes(String(existing['status']));
         const isActionable = (ACTIONABLE_STATUSES as string[]).includes(input.status);
         this.db
           .prepare(
             `UPDATE assignments SET title = ?, category = ?, due_date = ?, points_possible = ?,
              score = ?, score_raw = ?, score_letter = ?, status = ?, notes = ?,
-             last_seen_at = ?, stale = 0 WHERE id = ?`,
+             last_seen_at = ?, scored_at = ?, stale = 0 WHERE id = ?`,
           )
           .run(
             input.title,
@@ -566,16 +601,18 @@ export class GradebookStore {
             input.status,
             input.notes ?? null,
             now,
+            scoreEvent ? (after === null ? null : now) : str(existing['scored_at']),
             id,
           );
-        return { id, created: false, becameActionable: !wasActionable && isActionable };
+        if (scoreEvent) this.appendAssignmentScore(id, input, after === null, now);
+        return { id, created: false, becameActionable: !wasActionable && isActionable, scoreEvent };
       }
       const id = newId('asn');
       this.db
         .prepare(
           `INSERT INTO assignments (id, course_id, ext_key, title, category, due_date, points_possible,
-           score, score_raw, score_letter, status, notes, first_seen_at, last_seen_at, stale)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+           score, score_raw, score_letter, status, notes, first_seen_at, last_seen_at, scored_at, stale)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
         )
         .run(
           id,
@@ -592,13 +629,30 @@ export class GradebookStore {
           input.notes ?? null,
           now,
           now,
+          scoreKey(input.score ?? null, input.scoreRaw ?? null) === null ? null : now,
         );
+      const scoreEvent = scoreKey(input.score ?? null, input.scoreRaw ?? null) === null ? null : 'new_score';
+      if (scoreEvent) this.appendAssignmentScore(id, input, false, now);
       return {
         id,
         created: true,
         becameActionable: (ACTIONABLE_STATUSES as string[]).includes(input.status),
+        scoreEvent,
       };
     });
+  }
+
+  private appendAssignmentScore(id: string, input: UpsertAssignmentInput, cleared: boolean, now: string): void {
+    this.db.prepare(`
+      INSERT INTO assignment_scores
+        (assignment_id, observed_at, score, score_raw, score_letter, points_possible)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      id, now, cleared ? null : input.score ?? null,
+      cleared ? null : input.scoreRaw ?? null,
+      cleared ? null : input.scoreLetter ?? null,
+      cleared ? null : input.pointsPossible ?? null,
+    );
   }
 
   replaceTermMemberships(termId: string, studentId: string, seenAssignmentIds: ReadonlySet<string>): void {

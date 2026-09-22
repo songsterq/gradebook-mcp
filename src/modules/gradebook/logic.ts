@@ -5,6 +5,7 @@ import type {
   GradePoint,
   MissingAssignment,
   Student,
+  ScorePoint,
   SyncRunSummary,
   Term,
 } from './schema.js';
@@ -52,7 +53,14 @@ export function describeGrade(course: Pick<Course, 'gradeLetter' | 'gradeScore'>
   return letter || 'no grade posted';
 }
 
-export function describeScore(a: Assignment): string {
+/** Identity of a score for change detection; null when there is no score. */
+export function scoreKey(score: number | null, scoreRaw: string | null): string | null {
+  if (score !== null) return `n:${score}`;
+  const raw = scoreRaw?.trim();
+  return raw ? `r:${raw}` : null;
+}
+
+export function describeScore(a: Pick<Assignment, 'score' | 'scoreRaw' | 'scoreLetter' | 'pointsPossible'>): string {
   if (a.score !== null && a.score !== undefined && a.pointsPossible !== null && a.pointsPossible !== undefined) {
     return `${a.score}/${a.pointsPossible}`;
   }
@@ -60,6 +68,10 @@ export function describeScore(a: Assignment): string {
   if (a.scoreLetter) return a.scoreLetter;
   if (a.scoreRaw) return a.scoreRaw;
   return '—';
+}
+
+export function describeScoreTrail(points: ScorePoint[]): string {
+  return points.map(describeScore).join(' → ');
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -142,8 +154,9 @@ export function renderAssignments(course: Course, assignments: Assignment[], fil
     const due = a.dueDate ? ` · due ${a.dueDate}` : '';
     const category = a.category ? ` · ${a.category}` : '';
     const stale = a.stale ? ' · (no longer listed upstream)' : '';
+    const trail = a.history ? ` · was ${describeScoreTrail(a.history.slice(0, -1))}` : '';
     lines.push(
-      `- ${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${due}${category}${stale}`,
+      `- ${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${trail}${due}${category}${stale}`,
     );
   }
   return lines.join('\n');
@@ -178,7 +191,7 @@ export function renderTrend(course: Course, points: GradePoint[]): string {
 
 export function renderSyncSummary(summary: SyncRunSummary): string {
   const detail = summary.detail as {
-    students?: Array<{ name: string; courses: number; assignments: number; newMissing: number }>;
+    students?: Array<{ name: string; courses: number; assignments: number; newMissing: number; newScores?: number; rescored?: number }>;
     errors?: string[];
     durationMs?: number;
   };
@@ -188,7 +201,7 @@ export function renderSyncSummary(summary: SyncRunSummary): string {
   ];
   for (const s of detail.students ?? []) {
     lines.push(
-      `- ${s.name}: ${s.courses} courses, ${s.assignments} assignments, ${s.newMissing} newly missing`,
+      `- ${s.name}: ${s.courses} courses, ${s.assignments} assignments, ${s.newMissing} newly missing${s.newScores ? `, ${s.newScores} new scores` : ''}${s.rescored ? `, ${s.rescored} rescored` : ''}`,
     );
   }
   for (const e of detail.errors ?? []) {

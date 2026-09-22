@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrate, openDatabase } from '../../storage/sqlite.js';
+import { describeScoreTrail, renderAssignments, scoreKey } from './logic.js';
 import { MIGRATIONS } from './migrations.js';
 import { GradebookStore, fallbackExtKey } from './store.js';
 
@@ -11,6 +12,52 @@ function freshStore(): GradebookStore {
 
 const NOW = '2026-09-13T12:00:00.000Z';
 const YEAR = '2026-2027';
+
+describe('gradebook migration v5', () => {
+  it('backfills numeric and code scores at first sight, leaving unscored work alone', () => {
+    const db = openDatabase(':memory:');
+    migrate(db, MIGRATIONS.filter((migration) => migration.version <= 4));
+    db.exec(`
+      INSERT INTO students VALUES ('stu_a', 'pv_a', 'Aiden', 'Odle', NULL, '2026-09-01', '2026-09-01');
+      INSERT INTO courses (id, student_id, school_year, title) VALUES ('crs_a', 'stu_a', '2026-2027', 'Science');
+      INSERT INTO assignments
+        (id, course_id, ext_key, title, score, score_raw, score_letter, status, first_seen_at, last_seen_at)
+      VALUES
+        ('asn_num', 'crs_a', 'num', 'Numeric', 3.5, '3.50', NULL, 'scored', '2026-09-01', '2026-09-20'),
+        ('asn_code', 'crs_a', 'code', 'Code', NULL, ' A ', 'A', 'scored', '2026-09-02', '2026-09-20'),
+        ('asn_none', 'crs_a', 'none', 'None', NULL, '  ', NULL, 'not_due', '2026-09-03', '2026-09-20');
+    `);
+    migrate(db, MIGRATIONS);
+    expect(db.prepare('SELECT id, scored_at FROM assignments ORDER BY id').all()).toEqual([
+      { id: 'asn_code', scored_at: '2026-09-02' },
+      { id: 'asn_none', scored_at: null },
+      { id: 'asn_num', scored_at: '2026-09-01' },
+    ]);
+    expect(db.prepare('SELECT assignment_id, observed_at, score, score_raw FROM assignment_scores ORDER BY assignment_id').all()).toEqual([
+      { assignment_id: 'asn_code', observed_at: '2026-09-02', score: null, score_raw: ' A ' },
+      { assignment_id: 'asn_num', observed_at: '2026-09-01', score: 3.5, score_raw: '3.50' },
+    ]);
+    db.close();
+  });
+});
+
+describe('score helpers', () => {
+  it('compares numeric values and trimmed, case-sensitive code marks', () => {
+    expect(scoreKey(3.5, '3.5')).toBe(scoreKey(3.5, '3.50'));
+    expect(scoreKey(null, 'A')).toBe(scoreKey(null, ' A '));
+    expect(scoreKey(null, 'A')).not.toBe(scoreKey(null, 'Y'));
+    expect(scoreKey(null, '  ')).toBeNull();
+  });
+
+  it('describes numeric, code and cleared trail points', () => {
+    expect(describeScoreTrail([
+      { observedAt: NOW, score: 2.5, scoreRaw: '2.5', scoreLetter: null, pointsPossible: 4 },
+      { observedAt: NOW, score: 3.5, scoreRaw: '3.5', scoreLetter: null, pointsPossible: 4 },
+      { observedAt: NOW, score: null, scoreRaw: 'A', scoreLetter: 'A', pointsPossible: null },
+      { observedAt: NOW, score: null, scoreRaw: null, scoreLetter: null, pointsPossible: null },
+    ])).toBe('2.5/4 → 3.5/4 → A → —');
+  });
+});
 
 describe('gradebook migration v4', () => {
   it('merges v3 course and assignment duplicates without breaking foreign keys', () => {
@@ -199,6 +246,39 @@ describe('GradebookStore', () => {
     expect(store.assignments(cid, 'all').map((value) => value.title)).toEqual(['New', 'Old', 'No date']);
     expect(store.assignments(cid, 'upcoming').map((value) => value.title)).toEqual(['New', 'No date']);
     expect(store.assignments(cid, 'missing')).toEqual([]);
+  });
+
+  it('records score transitions and reads changed history in one lookup', () => {
+    const cid = course(student());
+    const input = { courseId: cid, extKey: 'a', title: 'Quiz', status: 'scored' as const };
+    const first = store.upsertAssignment({ ...input, score: null, scoreRaw: null }, NOW);
+    expect(first.scoreEvent).toBeNull();
+    const sameEmpty = store.upsertAssignment({ ...input, scoreRaw: '  ' }, NOW);
+    expect(sameEmpty.scoreEvent).toBeNull();
+    const scored = store.upsertAssignment({ ...input, score: 2.5, scoreRaw: '2.5', pointsPossible: 4 }, '2026-09-14');
+    expect(scored.scoreEvent).toBe('new_score');
+    expect(store.assignments(cid, 'all')[0]).toMatchObject({ scoredAt: '2026-09-14' });
+    expect(store.assignments(cid, 'all')[0]).not.toHaveProperty('history');
+    expect(store.upsertAssignment({ ...input, score: 2.5, scoreRaw: '2.50', pointsPossible: 5 }, '2026-09-15').scoreEvent).toBeNull();
+    expect(store.upsertAssignment({ ...input, score: 3.5, scoreRaw: '3.5', pointsPossible: 4 }, '2026-09-16').scoreEvent).toBe('rescored');
+    expect(store.upsertAssignment({ ...input, score: null, scoreRaw: null }, '2026-09-17').scoreEvent).toBe('cleared');
+    expect(store.assignments(cid, 'all')[0]?.scoredAt).toBeNull();
+    const code = store.upsertAssignment({ ...input, scoreRaw: 'A', scoreLetter: 'A' }, '2026-09-18');
+    expect(code.scoreEvent).toBe('new_score');
+    expect(store.upsertAssignment({ ...input, scoreRaw: ' A ', scoreLetter: 'A' }, '2026-09-19').scoreEvent).toBeNull();
+    expect(store.upsertAssignment({ ...input, scoreRaw: 'Y', scoreLetter: 'Y' }, '2026-09-20').scoreEvent).toBe('rescored');
+    const other = store.upsertAssignment({ ...input, extKey: 'b', title: 'Lab', score: 1, scoreRaw: '1' }, NOW);
+    expect(other).toMatchObject({ created: true, scoreEvent: 'new_score' });
+    const prepare = vi.spyOn((store as unknown as { db: { prepare: (sql: string) => unknown } }).db, 'prepare');
+    const assignments = store.assignments(cid, 'all');
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes('FROM assignment_scores'))).toHaveLength(1);
+    prepare.mockRestore();
+    expect(assignments.find((a) => a.id === other.id)).toMatchObject({ scoredAt: NOW, firstSeenAt: NOW });
+    expect(assignments.find((a) => a.id === other.id)).not.toHaveProperty('history');
+    const changed = assignments.find((a) => a.id === first.id)!;
+    expect(changed.history?.map((point) => point.scoreRaw)).toEqual(['2.5', '3.5', null, 'A', 'Y']);
+    expect(changed.history?.[2]).toMatchObject({ score: null, scoreRaw: null, scoreLetter: null, pointsPossible: null });
+    expect(renderAssignments({ title: 'Science' } as Parameters<typeof renderAssignments>[0], [changed], 'all')).toContain('was 2.5/4 → 3.5/4 → — → A');
   });
 
   it('records sync runs with their trigger and finish time', () => {
