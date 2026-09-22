@@ -61,6 +61,14 @@ describe('renderDashboardPage', () => {
     expect(page).toContain('gb-tab-count">1<');
   });
 
+  it('shows the last sync time in the same friendly format as What\'s new', () => {
+    const at = '2026-09-22T22:48:20.728Z';
+    const zoned = renderDashboardPage(model({ lastSyncAt: at, timeZone: 'America/Los_Angeles' })).__html;
+    expect(zoned).toContain(`Last synced <time datetime="${at}">Sep 22, 2026, 3:48 PM</time>`);
+    const plain = renderDashboardPage(model({ lastSyncAt: at })).__html;
+    expect(plain).toContain('Last synced <time datetime="2026-09-22T22:48:20.728Z">2026-09-22 22:48:20Z</time>');
+  });
+
   it('renders the missing view', () => {
     const student = { id: 'stu_a', parentvueId: '1', name: 'Aiden', school: 'Odle', gradeLevel: '06', firstSeenAt: 'x', lastSeenAt: 'x' };
     const page = renderDashboardPage(model({ view: 'missing', students: [student], activeStudent: student, missing: [] })).__html;
