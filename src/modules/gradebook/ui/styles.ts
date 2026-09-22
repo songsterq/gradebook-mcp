@@ -79,6 +79,20 @@ export const GRADEBOOK_STYLES = `
 .gb-tab[aria-current] .gb-tab-count { background: rgba(255,255,255,.25); color: inherit; }
 .gb-year { margin-left: .2rem; font-size: .8125rem; color: var(--gb-muted); }
 
+/* --- What's new -------------------------------------------------------- */
+.gb-whats-new { margin-bottom: 1.25rem; }
+.gb-whats-new h2 { margin: 0; padding: .8rem 1rem; font-size: 1rem; color: var(--gb-text); }
+.gb-whats-new ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--gb-border); }
+.gb-whats-new li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .7rem;
+  padding: .55rem 1rem; border-bottom: 1px solid var(--gb-border); font-size: .875rem;
+}
+.gb-whats-new li:last-child { border-bottom: 0; }
+.gb-whats-new-title { font-weight: 650; color: var(--gb-text); }
+.gb-whats-new-course { color: var(--gb-muted); }
+.gb-whats-new-kind { color: var(--gb-accent); }
+.gb-whats-new-score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--gb-text); }
+
 /* --- Course cards ------------------------------------------------------ */
 .gb-courses { display: grid; gap: .75rem; }
 .gb-course {
@@ -154,6 +168,10 @@ export const GRADEBOOK_STYLES = `
 /* An inset shadow rather than a border, so flagged rows keep the same padding. */
 .gb-table tbody tr[data-flag] td:first-child { box-shadow: inset 3px 0 0 var(--gb-bad-fg); }
 .gb-title-cell { font-weight: 550; color: var(--gb-text); min-width: 11rem; }
+.gb-new-dot {
+  display: inline-block; width: .45rem; height: .45rem; margin-right: .4rem;
+  border-radius: 50%; background: var(--gb-accent); vertical-align: middle;
+}
 .gb-date { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--gb-muted); }
 .gb-cat { color: var(--gb-muted); }
 .gb-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

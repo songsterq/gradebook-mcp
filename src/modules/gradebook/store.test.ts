@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrate, openDatabase } from '../../storage/sqlite.js';
-import { describeScoreTrail, renderAssignments, scoreKey } from './logic.js';
+import { describeScoreTrail, renderAssignments, renderOverview, scoreKey } from './logic.js';
 import { MIGRATIONS } from './migrations.js';
 import { GradebookStore, fallbackExtKey } from './store.js';
 
@@ -300,5 +300,119 @@ describe('fallbackExtKey', () => {
     expect(fallbackExtKey('Math', 'HW 1', '2026-09-10')).toBe(a);
     expect(fallbackExtKey('Math', 'HW 2', '2026-09-10')).not.toBe(a);
     expect(a.startsWith('fb:')).toBe(true);
+  });
+});
+
+describe('sticky whatsNew', () => {
+  let store: GradebookStore;
+  beforeEach(() => { store = freshStore(); });
+
+  function setup(name = 'Aiden', studentAt = '2026-09-01T00:00:00.000Z') {
+    const studentId = store.upsertStudent({ parentvueId: name, name, school: 'Odle' }, studentAt).id;
+    const courseId = store.upsertCourse({ studentId, schoolYear: YEAR, title: 'Science' }, studentAt).id;
+    const add = (key: string, at: string, score?: number) => store.upsertAssignment({
+      courseId, extKey: key, title: key, status: 'scored', score, scoreRaw: score === undefined ? null : String(score),
+    }, at);
+    return { studentId, courseId, add };
+  }
+
+  it('does not call the first sync new when student and gradebook arrive together', () => {
+    const first = '2026-09-20T00:00:00.000Z';
+    const { studentId, add } = setup('Aiden', first);
+    add('First Lab', first, 4);
+    expect(store.whatsNew(studentId)).toEqual({ at: null, since: null, items: [] });
+  });
+
+  it('uses the first gradebook assignment as cutoff and keeps two nearby arrivals through empty syncs', () => {
+    const { studentId, add } = setup();
+    add('bootstrap', '2026-09-20T12:00:00.000Z');
+    expect(store.whatsNew(studentId)).toEqual({ at: null, since: null, items: [] });
+    add('first', '2026-09-21T12:00:00.000Z');
+    add('second', '2026-09-21T12:05:00.000Z');
+    const before = store.whatsNew(studentId);
+    expect(before.at).toBe('2026-09-21T12:05:00.000Z');
+    expect(before.since).toBe('2026-09-20T12:05:00.000Z');
+    expect(before.items.map((item) => [item.assignment.title, item.kind])).toEqual([
+      ['second', 'new_assignment'], ['first', 'new_assignment'],
+    ]);
+    add('first', '2026-09-21T13:00:00.000Z');
+    const after = store.whatsNew(studentId);
+    expect(after.at).toBe(before.at);
+    expect(after.since).toBe(before.since);
+    expect(after.items.map((item) => [item.assignment.id, item.kind]))
+      .toEqual(before.items.map((item) => [item.assignment.id, item.kind]));
+  });
+
+  it('uses an anchored 24-hour window independently for each student', () => {
+    const a = setup('Aiden');
+    const b = setup('Bella');
+    a.add('bootstrap', '2026-09-20T00:00:00.000Z');
+    b.add('bootstrap', '2026-09-20T00:00:00.000Z');
+    a.add('old', '2026-09-21T00:00:00.000Z');
+    b.add('bella-new', '2026-09-21T00:00:00.000Z');
+    a.add('latest', '2026-09-22T01:00:00.000Z');
+    expect(store.whatsNew(a.studentId).items.map((item) => item.assignment.title)).toEqual(['latest']);
+    expect(store.whatsNew(b.studentId).items.map((item) => item.assignment.title)).toEqual(['bella-new']);
+  });
+
+  it('keeps one new-assignment item when a score arrives later and orders by the later event', () => {
+    const { studentId, add } = setup();
+    add('bootstrap', '2026-09-20T00:00:00.000Z');
+    add('arrived', '2026-09-21T10:00:00.000Z');
+    add('other', '2026-09-21T11:00:00.000Z');
+    add('arrived', '2026-09-21T12:00:00.000Z', 4);
+    expect(store.whatsNew(studentId).items.map((item) => [item.assignment.title, item.kind])).toEqual([
+      ['arrived', 'new_assignment'], ['other', 'new_assignment'],
+    ]);
+  });
+
+  it('prioritizes new assignments and classifies posted, changed, and cleared scores', () => {
+    const { studentId, courseId, add } = setup();
+    add('bootstrap', '2026-09-20T00:00:00.000Z');
+    add('older-scored', '2026-09-20T00:00:00.000Z', 2);
+    add('older-unscored', '2026-09-20T00:00:00.000Z');
+    add('to-clear', '2026-09-20T00:00:00.000Z', 1);
+    const at = '2026-09-21T00:00:00.000Z';
+    add('arrived-scored', at, 3);
+    store.upsertAssignment({ courseId, extKey: 'older-scored', title: 'older-scored', status: 'scored', score: 4, scoreRaw: '4' }, at);
+    store.upsertAssignment({ courseId, extKey: 'older-unscored', title: 'older-unscored', status: 'scored', scoreRaw: 'A', scoreLetter: 'A' }, at);
+    store.upsertAssignment({ courseId, extKey: 'to-clear', title: 'to-clear', status: 'scored' }, at);
+    const result = store.whatsNew(studentId);
+    expect(result.items.map((item) => [item.assignment.title, item.kind])).toEqual([
+      ['arrived-scored', 'new_assignment'],
+      ['older-scored', 'rescored'],
+      ['older-unscored', 'new_score'],
+    ]);
+    expect(result.items[0]?.assignment.score).toBe(3);
+    expect(result.items[1]?.courseId).toBe(courseId);
+    expect(result.items[1]?.courseTitle).toBe('Science');
+    const spy = vi.spyOn((store as unknown as { db: { prepare: (sql: string) => unknown } }).db, 'prepare');
+    store.whatsNew(studentId);
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
+
+  it('excludes stale work and backfilled first-sight scores', () => {
+    const { studentId, courseId, add } = setup();
+    add('bootstrap', '2026-09-20T00:00:00.000Z');
+    const stale = add('stale', '2026-09-21T00:00:00.000Z');
+    const backfilled = add('backfilled', '2026-09-21T01:00:00.000Z', 3);
+    const db = (store as unknown as { db: ReturnType<typeof openDatabase> }).db;
+    db.prepare('UPDATE assignments SET stale = 1 WHERE id = ?').run(stale.id);
+    db.prepare('UPDATE assignments SET first_seen_at = ?, scored_at = ? WHERE id = ?')
+      .run('2026-09-20T00:00:00.000Z', '2026-09-20T00:00:00.000Z', backfilled.id);
+    expect(store.whatsNew(studentId)).toEqual({ at: null, since: null, items: [] });
+    expect(store.assignments(courseId, 'all').find((item) => item.id === backfilled.id)?.scoredAt).toBe('2026-09-20T00:00:00.000Z');
+  });
+
+  it('renders the overview section only when there are items', () => {
+    const { studentId, add } = setup();
+    add('bootstrap', '2026-09-20T00:00:00.000Z');
+    const student = store.resolveStudent(studentId);
+    const overview = () => renderOverview([{ student, term: null, courses: [], whatsNew: store.whatsNew(studentId) }]);
+    expect(overview()).not.toContain("What's new");
+    add('Lab', '2026-09-21T00:00:00.000Z');
+    expect(overview()).toContain("What's new since 2026-09-20T00:00:00.000Z");
+    expect(overview()).toContain('Lab (Science) · new assignment · —');
   });
 });

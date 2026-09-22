@@ -8,6 +8,8 @@ import type {
   ScorePoint,
   SyncRunSummary,
   Term,
+  WhatsNew,
+  WhatsNewItem,
 } from './schema.js';
 
 const ID_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -92,6 +94,11 @@ export interface OverviewStudent {
   student: Student;
   term: Term | null;
   courses: Course[];
+  whatsNew: WhatsNew;
+}
+
+export function whatsNewLabel(kind: WhatsNewItem['kind']): string {
+  return kind === 'new_assignment' ? 'new assignment' : kind === 'new_score' ? 'new score' : 'score changed';
 }
 
 export function renderOverview(students: OverviewStudent[]): string {
@@ -99,20 +106,23 @@ export function renderOverview(students: OverviewStudent[]): string {
     return 'No students on file yet. Run gradebook_sync to pull ParentVUE.';
   }
   const lines: string[] = [];
-  for (const { student, term, courses } of students) {
+  for (const { student, term, courses, whatsNew } of students) {
     lines.push(`## ${student.name} — ${student.school}`);
     if (!term) {
       lines.push('No synced terms yet.');
-      continue;
+    } else {
+      lines.push(`*${termLabel(term)}*`);
+      if (courses.length === 0) lines.push('No courses this term.');
+      for (const course of courses) {
+        const missing = course.missingCount > 0 ? ` · ${course.missingCount} missing` : '';
+        lines.push(`- ${course.title}: ${describeGrade(course)}${missing} (${course.id})`);
+      }
     }
-    lines.push(`*${termLabel(term)}*`);
-    if (courses.length === 0) {
-      lines.push('No courses this term.');
-      continue;
-    }
-    for (const course of courses) {
-      const missing = course.missingCount > 0 ? ` · ${course.missingCount} missing` : '';
-      lines.push(`- ${course.title}: ${describeGrade(course)}${missing} (${course.id})`);
+    if (whatsNew.items.length > 0) {
+      lines.push(`What's new since ${whatsNew.since}`);
+      for (const item of whatsNew.items) {
+        lines.push(`- ${item.assignment.title} (${item.courseTitle}) · ${whatsNewLabel(item.kind)} · ${describeScore(item.assignment)}`);
+      }
     }
   }
   return lines.join('\n');
@@ -144,7 +154,7 @@ export function renderCourses(student: Student, term: Term, courses: Course[]): 
   return lines.join('\n');
 }
 
-export function renderAssignments(course: Course, assignments: Assignment[], filter: string): string {
+export function renderAssignments(course: Course, assignments: (Assignment & { new?: boolean })[], filter: string): string {
   const lines = [`## ${course.title} — ${filter}`];
   if (assignments.length === 0) {
     lines.push('Nothing here.');
@@ -155,8 +165,9 @@ export function renderAssignments(course: Course, assignments: Assignment[], fil
     const category = a.category ? ` · ${a.category}` : '';
     const stale = a.stale ? ' · (no longer listed upstream)' : '';
     const trail = a.history ? ` · was ${describeScoreTrail(a.history.slice(0, -1))}` : '';
+    const fresh = a.new ? ' · new' : '';
     lines.push(
-      `- ${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${trail}${due}${category}${stale}`,
+      `- ${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${trail}${due}${category}${stale}${fresh}`,
     );
   }
   return lines.join('\n');

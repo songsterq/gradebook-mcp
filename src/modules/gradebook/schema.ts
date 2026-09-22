@@ -104,6 +104,19 @@ export interface ScorePoint {
 
 export type ScoreEvent = 'new_score' | 'rescored' | 'cleared';
 
+export interface WhatsNewItem {
+  kind: 'new_assignment' | 'new_score' | 'rescored';
+  assignment: Assignment;
+  courseId: string;
+  courseTitle: string;
+}
+
+export interface WhatsNew {
+  at: string | null;
+  since: string | null;
+  items: WhatsNewItem[];
+}
+
 export interface GradePoint {
   observedAt: string;
   gradeLetter: string | null;

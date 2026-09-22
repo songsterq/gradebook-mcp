@@ -79,6 +79,7 @@ export function createGradebookUiRouter(
       const student = pickStudent(store, queryField(req.query.student));
       const term = student ? pickTerm(store, student, queryField(req.query.term), today()) : null;
       const terms = student ? store.terms(student.id) : [];
+      const whatsNew = student ? store.whatsNew(student.id) : { at: null, since: null, items: [] };
       const cards: CourseCardModel[] =
         term && view === 'courses'
           ? store.courses(term.id).map((course) => ({
@@ -97,6 +98,8 @@ export function createGradebookUiRouter(
         terms,
         activeTerm: term,
         cards,
+        whatsNew,
+        timeZone: ctx.config.tz,
         missing,
         view,
         configured: options.configured,

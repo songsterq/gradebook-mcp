@@ -1,7 +1,7 @@
 import { html } from '../../../ui/html.js';
 import type { Html } from '../../../ui/html.js';
-import { describeGrade, describeScore, describeScoreTrail, statusLabel, termLabel } from '../logic.js';
-import type { Assignment, Course, MissingAssignment, Student, Term } from '../schema.js';
+import { describeGrade, describeScore, describeScoreTrail, statusLabel, termLabel, whatsNewLabel } from '../logic.js';
+import type { Assignment, Course, MissingAssignment, Student, Term, WhatsNew } from '../schema.js';
 
 export interface CourseCardModel {
   course: Course;
@@ -14,6 +14,8 @@ export interface DashboardPageModel {
   terms: Term[];
   activeTerm: Term | null;
   cards: CourseCardModel[];
+  whatsNew: WhatsNew;
+  timeZone?: string;
   missing: MissingAssignment[];
   view: 'courses' | 'missing';
   configured: boolean;
@@ -78,6 +80,30 @@ function renderScore(a: Assignment): Html {
     return html`${body}<span class="gb-pct">${Math.round((a.score / a.pointsPossible) * 100)}%</span>${trail}`;
   }
   return html`${body}${trail}`;
+}
+
+function sinceLabel(iso: string, timeZone?: string): string {
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat('en-US', { timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
+    } catch {
+      // An unrecognised TZ must not take the dashboard down; fall through to UTC text.
+    }
+  }
+  return iso.replace('T', ' ').replace(/\.\d+(?=Z$)/, '');
+}
+
+function renderWhatsNew(whatsNew: WhatsNew, timeZone?: string): Html | null {
+  if (whatsNew.items.length === 0 || !whatsNew.since) return null;
+  return html`<section class="gb-whats-new gb-panel" aria-label="What's new">
+    <h2>New since <time datetime="${whatsNew.since}">${sinceLabel(whatsNew.since, timeZone)}</time></h2>
+    <ul>${whatsNew.items.map((item) => html`<li>
+      <span class="gb-whats-new-title">${item.assignment.title}</span>
+      <span class="gb-whats-new-course">${item.courseTitle}</span>
+      <span class="gb-whats-new-kind">${whatsNewLabel(item.kind)}</span>
+      <span class="gb-whats-new-score">${describeScore(item.assignment)}</span>
+    </li>`)}</ul>
+  </section>`;
 }
 
 const STATUS_TONE: Record<string, string> = {
@@ -160,10 +186,11 @@ function renderViewTabs(model: DashboardPageModel): Html | null {
 
 const FLAGGED = new Set(['missing', 'incomplete', 'late']);
 
-function renderAssignmentRow(a: Assignment): Html {
+function renderAssignmentRow(a: Assignment, newIds: ReadonlySet<string>): Html {
   const status = html`<span class="gb-status" data-tone="${STATUS_TONE[a.status] ?? 'flat'}">${statusLabel(a.status)}</span>${a.stale ? html`<span class="gb-stale" title="No longer listed upstream">stale</span>` : null}`;
-  return html`<tr${FLAGGED.has(a.status) ? html` data-flag="true"` : null}>
-    <td class="gb-title-cell">${a.title}</td>
+  const fresh = newIds.has(a.id);
+  return html`<tr${FLAGGED.has(a.status) ? html` data-flag="true"` : null}${fresh ? html` data-new="true"` : null}>
+    <td class="gb-title-cell">${fresh ? html`<span class="gb-new-dot" aria-hidden="true"></span>` : null}${a.title}</td>
     <td class="gb-col-due">${renderDate(a.dueDate)}</td>
     <td class="gb-cat gb-col-cat">${a.category ?? html`<span class="gb-dash">—</span>`}</td>
     <td class="gb-num">${renderScore(a)}</td>
@@ -171,7 +198,7 @@ function renderAssignmentRow(a: Assignment): Html {
   </tr>`;
 }
 
-function renderCourseCard(card: CourseCardModel): Html {
+function renderCourseCard(card: CourseCardModel, newIds: ReadonlySet<string>): Html {
   const { course, assignments } = card;
   const missingBadge =
     course.missingCount > 0 ? html`<span class="gb-flag">${course.missingCount} missing</span>` : null;
@@ -199,7 +226,7 @@ function renderCourseCard(card: CourseCardModel): Html {
             <th scope="col" class="gb-num gb-col-score">Score</th>
             <th scope="col" class="gb-col-status">Status</th>
           </tr></thead>
-          <tbody>${assignments.map(renderAssignmentRow)}</tbody>
+          <tbody>${assignments.map((assignment) => renderAssignmentRow(assignment, newIds))}</tbody>
         </table>
       </div>`
       : html`<p class="gb-empty">No assignments recorded.</p>`}
@@ -235,6 +262,9 @@ function renderMissingTable(missing: MissingAssignment[]): Html {
 }
 
 export function renderDashboardPage(model: DashboardPageModel): Html {
+  // Every item gets the dot, matching the `new` flag gradebook_assignments reports:
+  // a freshly graded row is as much news as a freshly listed one.
+  const newIds = new Set(model.whatsNew.items.map((item) => item.assignment.id));
   const heading = model.activeStudent ? `${model.activeStudent.name}'s gradebook` : 'Gradebook';
   // The date range is shown because it is *why* this term is the default: the
   // dashboard opens on whichever period the district says today falls inside.
@@ -267,9 +297,9 @@ export function renderDashboardPage(model: DashboardPageModel): Html {
         </div>
         ${model.view === 'missing'
           ? renderMissingTable(model.missing)
-          : model.cards.length > 0
-            ? html`<section class="gb-courses" aria-label="Courses">${model.cards.map(renderCourseCard)}</section>`
-            : html`<div class="gb-panel"><p class="gb-note">No courses this term.</p></div>`}
+          : html`${renderWhatsNew(model.whatsNew, model.timeZone)}${model.cards.length > 0
+            ? html`<section class="gb-courses" aria-label="Courses">${model.cards.map((card) => renderCourseCard(card, newIds))}</section>`
+            : html`<div class="gb-panel"><p class="gb-note">No courses this term.</p></div>`}`}
       `}
     <div class="gb-foot">
       <p>${model.lastSyncAt ? html`Last synced ${model.lastSyncAt}` : 'Never synced.'}</p>

@@ -706,6 +706,7 @@ describe('logic helpers', () => {
       },
       term: null,
       courses: [],
+      whatsNew: { at: null, since: null, items: [] },
     }])).toContain('No synced terms');
   });
 });

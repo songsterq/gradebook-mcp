@@ -9,6 +9,7 @@ function model(overrides: Partial<DashboardPageModel> = {}): DashboardPageModel 
     terms: [],
     activeTerm: null,
     cards: [],
+    whatsNew: { at: null, since: null, items: [] },
     missing: [],
     view: 'courses',
     configured: true,
@@ -82,5 +83,42 @@ describe('renderDashboardPage', () => {
     expect(page.match(/class="gb-trail"/g)).toHaveLength(1);
     expect(page).toContain('2.5/4 → 3.5/4');
     expect(page).toContain('title="2026-09-01 → 2026-09-02"');
+  });
+
+  it('shows new work above cards and marks every new row', () => {
+    const student = { id: 'stu_a', parentvueId: 'p', name: 'Aiden', school: 'Odle', gradeLevel: null, firstSeenAt: 'x', lastSeenAt: 'x' };
+    const course = { id: 'crs_a', termId: 'trm_a', title: 'Science', teacher: null, room: null, period: null, gradeLetter: null, gradeScore: null, missingCount: 0, lastSyncedAt: null };
+    const assignment = { id: 'asn_new', courseId: course.id, extKey: 'a', title: 'New Lab', category: null, dueDate: null,
+      pointsPossible: 4, score: 3, scoreRaw: '3', scoreLetter: null, status: 'scored' as const, notes: null,
+      firstSeenAt: '2026-09-22T00:00:00.000Z', lastSeenAt: '2026-09-22T00:00:00.000Z', scoredAt: '2026-09-22T00:00:00.000Z', stale: false };
+    const scored = { ...assignment, id: 'asn_score', extKey: 'b', title: 'Old Quiz', firstSeenAt: '2026-09-20T00:00:00.000Z' };
+    const whatsNew = { at: '2026-09-22T00:00:00.000Z', since: '2026-09-21T00:00:00.000Z', items: [
+      { kind: 'new_assignment' as const, assignment, courseId: course.id, courseTitle: course.title },
+      { kind: 'new_score' as const, assignment: scored, courseId: course.id, courseTitle: course.title },
+    ] };
+    const page = renderDashboardPage(model({ students: [student], activeStudent: student,
+      cards: [{ course, assignments: [assignment, scored] }], whatsNew, timeZone: 'America/Los_Angeles' })).__html;
+    expect(page).toContain('New since <time datetime="2026-09-21T00:00:00.000Z">Sep 20, 2026, 5:00 PM</time>');
+    expect(page.indexOf('gb-whats-new')).toBeLessThan(page.indexOf('gb-courses'));
+    expect(page).toContain('new assignment');
+    expect(page).toContain('new score');
+    expect(page.match(/data-new="true"/g)).toHaveLength(2);
+    expect(page).toMatch(/<tr data-new="true">\s*<td class="gb-title-cell"><span class="gb-new-dot"[^>]*><\/span>New Lab/);
+    expect(page).toMatch(/data-new="true"[^>]*>\s*<td[^>]*><span class="gb-new-dot"[^>]*><\/span>Old Quiz/);
+    const missing = renderDashboardPage(model({ students: [student], activeStudent: student, view: 'missing', whatsNew })).__html;
+    expect(missing).not.toContain('gb-whats-new');
+  });
+
+  it('hides an empty panel and displays ISO date and time without a configured timezone', () => {
+    const student = { id: 'stu_a', parentvueId: 'p', name: 'Aiden', school: 'Odle', gradeLevel: null, firstSeenAt: 'x', lastSeenAt: 'x' };
+    expect(renderDashboardPage(model({ students: [student], activeStudent: student })).__html).not.toContain('gb-whats-new');
+    const assignment = { id: 'asn_a', courseId: 'crs_a', extKey: 'a', title: 'Lab', category: null, dueDate: null,
+      pointsPossible: null, score: null, scoreRaw: null, scoreLetter: null, status: 'collected' as const, notes: null,
+      firstSeenAt: '2026-09-22T00:00:00.000Z', lastSeenAt: '2026-09-22T00:00:00.000Z', scoredAt: null, stale: false };
+    const whatsNew = { at: '2026-09-22T00:00:00.000Z', since: '2026-09-21T00:00:00.000Z', items: [
+      { kind: 'new_assignment' as const, assignment, courseId: 'crs_a', courseTitle: 'Science' },
+    ] };
+    expect(renderDashboardPage(model({ students: [student], activeStudent: student, whatsNew })).__html)
+      .toContain('2026-09-21 00:00:00');
   });
 });

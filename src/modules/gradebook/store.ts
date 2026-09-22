@@ -16,6 +16,7 @@ import type {
   SyncRunSummary,
   SyncTrigger,
   Term,
+  WhatsNew,
 } from './schema.js';
 
 type RawRow = Record<string, unknown>;
@@ -346,6 +347,56 @@ export class GradebookStore {
       if (points) assignment.history = points;
     }
     return assignments;
+  }
+
+  whatsNew(studentId: string): WhatsNew {
+    const anchor = this.db.prepare(`
+      WITH cutoff AS (
+        SELECT MIN(a.first_seen_at) AS time
+        FROM assignments a JOIN courses c ON c.id = a.course_id
+        WHERE c.student_id = ?
+      ), events AS (
+        SELECT a.first_seen_at AS time
+        FROM assignments a JOIN courses c ON c.id = a.course_id, cutoff
+        WHERE c.student_id = ? AND a.stale = 0 AND a.first_seen_at > cutoff.time
+        UNION ALL
+        SELECT a.scored_at AS time
+        FROM assignments a JOIN courses c ON c.id = a.course_id, cutoff
+        WHERE c.student_id = ? AND a.stale = 0 AND a.scored_at > cutoff.time
+          AND a.scored_at <> a.first_seen_at
+      )
+      SELECT (SELECT time FROM cutoff) AS cutoff, MAX(time) AS at FROM events
+    `).get(studentId, studentId, studentId) as RawRow;
+    const at = str(anchor['at']);
+    if (!at) return { at: null, since: null, items: [] };
+    const cutoff = String(anchor['cutoff']);
+    const since = new Date(Date.parse(at) - 24 * 60 * 60 * 1000).toISOString();
+    const rows = this.db.prepare(`
+      SELECT a.*, c.title AS course_title,
+        (SELECT COUNT(*) FROM assignment_scores s
+         WHERE s.assignment_id = a.id
+           AND (s.score IS NOT NULL OR TRIM(COALESCE(s.score_raw, '')) <> '')) AS score_count,
+        CASE WHEN a.scored_at > a.first_seen_at AND a.scored_at > ? AND a.scored_at > ?
+          THEN a.scored_at ELSE a.first_seen_at END AS event_time
+      FROM assignments a
+      JOIN courses c ON c.id = a.course_id
+      WHERE c.student_id = ? AND a.stale = 0
+        AND ((a.first_seen_at > ? AND a.first_seen_at > ?)
+          OR (a.scored_at > ? AND a.scored_at > ? AND a.scored_at <> a.first_seen_at))
+      ORDER BY event_time DESC, c.title, a.title
+    `).all(since, cutoff, studentId, since, cutoff, since, cutoff) as RawRow[];
+    return {
+      at,
+      since,
+      items: rows.map((row) => ({
+        kind: String(row['first_seen_at']) > since && String(row['first_seen_at']) > cutoff
+          ? 'new_assignment' as const
+          : Number(row['score_count']) >= 2 ? 'rescored' as const : 'new_score' as const,
+        assignment: toAssignment(row),
+        courseId: String(row['course_id']),
+        courseTitle: String(row['course_title']),
+      })),
+    };
   }
 
   /**

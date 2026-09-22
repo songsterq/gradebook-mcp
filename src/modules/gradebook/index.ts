@@ -27,6 +27,7 @@ import { createGradebookUiRouter } from './ui/router.js';
 const INSTRUCTIONS =
   'Students are addressed by name (case-insensitive) or stu_ id; courses by crs_ id — use gradebook_overview to find them. ' +
   'Data is a nightly ParentVUE snapshot: call gradebook_sync first if freshness matters. ' +
+  'gradebook_overview includes what\'s new for each student. ' +
   'gradebook_missing is the first place to look for action items: the consolidated missing-work view ParentVUE lacks. ' +
   'This module is read-only upstream; it never writes back to the school district.';
 
@@ -161,7 +162,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         withAudit(ctx.logger, ctx.identity, 'gradebook_overview', () => {
           const students: OverviewStudent[] = store.listStudents().map((student) => {
             const term = store.latestTerm(student.id);
-            return { student, term, courses: term ? store.courses(term.id) : [] };
+            return { student, term, courses: term ? store.courses(term.id) : [], whatsNew: store.whatsNew(student.id) };
           });
           return textResult({ students }, renderOverview(students));
         }),
@@ -218,7 +219,11 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         },
         withAudit(ctx.logger, ctx.identity, 'gradebook_assignments', ({ course, status }) => {
           const { course: resolved, term, student } = store.resolveCourse(course);
-          const assignments = store.assignments(resolved.id, status);
+          const newIds = new Set(store.whatsNew(student.id).items.map((item) => item.assignment.id));
+          const assignments = store.assignments(resolved.id, status).map((assignment) => ({
+            ...assignment,
+            new: newIds.has(assignment.id),
+          }));
           return textResult(
             { student, term: termLabel(term), course: resolved, status, assignments },
             renderAssignments(resolved, assignments, status),
