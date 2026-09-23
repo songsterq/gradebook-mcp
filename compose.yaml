@@ -8,7 +8,11 @@ services:
     container_name: gradebook-mcp
     restart: unless-stopped
     env_file: .env
-    environment: [DATA_DIR=/data]
+    # Set here rather than left to .env: `environment` wins over `env_file`, so
+    # a blank line copied from .env.example can't clear the wildcard-bind
+    # allowance the image sets and stop a dashboard-only install from starting.
+    # The bind is safe because the ports below publish only to *_BIND_ADDR.
+    environment: [DATA_DIR=/data, UI_ALLOW_WILDCARD_BIND=true]
     # A new named volume inherits /data's image ownership, so the Dockerfile
     # chown lets the node user write here on first creation.
     volumes: [gradebook-data:/data]
