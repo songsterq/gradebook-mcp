@@ -79,6 +79,30 @@ export const GRADEBOOK_STYLES = `
 .gb-tab[aria-current] .gb-tab-count { background: rgba(255,255,255,.25); color: inherit; }
 .gb-year { margin-left: .2rem; font-size: .8125rem; color: var(--gb-muted); }
 
+/* --- What's new -------------------------------------------------------- */
+/* Tinted with the info tokens so the panel stands out from the course cards in both
+   themes. Qualified with .gb-panel so it outranks that rule, which comes later. */
+.gb-panel.gb-whats-new {
+  margin-bottom: 1.25rem; background: var(--gb-info-bg);
+  border-color: color-mix(in srgb, var(--gb-accent) 35%, var(--gb-border));
+}
+.gb-whats-new h2 { margin: 0; padding: .8rem 1rem; font-size: 1rem; color: var(--gb-text); }
+.gb-whats-new ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid color-mix(in srgb, var(--gb-accent) 25%, var(--gb-border)); }
+.gb-whats-new li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .7rem;
+  padding: .55rem 1rem; border-bottom: 1px solid color-mix(in srgb, var(--gb-accent) 25%, var(--gb-border)); font-size: .875rem;
+}
+.gb-whats-new li:last-child { border-bottom: 0; }
+.gb-whats-new li[data-kind="now_missing"] { background: color-mix(in srgb, var(--gb-bad-bg) 70%, transparent); }
+.gb-whats-new-title { font-weight: 650; color: var(--gb-text); }
+.gb-whats-new li[data-kind="now_missing"] .gb-whats-new-kind {
+  padding: .1rem .4rem; border-radius: .35rem;
+  background: var(--gb-bad-bg); color: var(--gb-bad-fg);
+}
+.gb-whats-new-course { color: var(--gb-muted); }
+.gb-whats-new-kind { color: var(--gb-accent); }
+.gb-whats-new-score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--gb-text); }
+
 /* --- Course cards ------------------------------------------------------ */
 .gb-courses { display: grid; gap: .75rem; }
 .gb-course {
@@ -154,10 +178,19 @@ export const GRADEBOOK_STYLES = `
 /* An inset shadow rather than a border, so flagged rows keep the same padding. */
 .gb-table tbody tr[data-flag] td:first-child { box-shadow: inset 3px 0 0 var(--gb-bad-fg); }
 .gb-title-cell { font-weight: 550; color: var(--gb-text); min-width: 11rem; }
+.gb-new-dot {
+  display: inline-block; width: .45rem; height: .45rem; margin-right: .4rem;
+  border-radius: 50%; background: var(--gb-accent); vertical-align: middle;
+}
+.gb-warning-icon {
+  display: inline-block; width: 1em; height: 1em; margin-right: .4rem;
+  color: var(--gb-bad-fg); vertical-align: -.1em; flex: none;
+}
 .gb-date { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--gb-muted); }
 .gb-cat { color: var(--gb-muted); }
 .gb-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gb-score { font-weight: 650; }
+.gb-trail { display: block; margin-top: .15rem; color: var(--gb-muted); font-size: .75rem; font-weight: 400; }
 .gb-pct { margin-left: .3rem; font-size: .75rem; font-weight: 500; color: var(--gb-muted); }
 .gb-dash { color: var(--gb-muted); }
 .gb-empty { margin: 0; padding: .9rem 1rem; border-top: 1px solid var(--gb-border);

@@ -27,6 +27,7 @@ import { createGradebookUiRouter } from './ui/router.js';
 const INSTRUCTIONS =
   'Students are addressed by name (case-insensitive) or stu_ id; courses by crs_ id — use gradebook_overview to find them. ' +
   'Data is a nightly ParentVUE snapshot: call gradebook_sync first if freshness matters. ' +
+  'gradebook_overview includes what\'s new for each student. ' +
   'gradebook_missing is the first place to look for action items: the consolidated missing-work view ParentVUE lacks. ' +
   'This module is read-only upstream; it never writes back to the school district.';
 
@@ -154,16 +155,16 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_overview',
         {
           title: 'Gradebook overview',
-          description: 'Every student, their current term, and per-course grades with missing counts.',
+          description: 'Every student, their current term, per-course grades with missing counts, and what\'s new: new assignments, scores, and missing work in the 24 hours before the latest change. Start here for "anything new?"',
           inputSchema: {},
           annotations: { readOnlyHint: true, openWorldHint: false },
         },
         withAudit(ctx.logger, ctx.identity, 'gradebook_overview', () => {
           const students: OverviewStudent[] = store.listStudents().map((student) => {
             const term = store.latestTerm(student.id);
-            return { student, term, courses: term ? store.courses(term.id) : [] };
+            return { student, term, courses: term ? store.courses(term.id) : [], whatsNew: store.whatsNew(student.id) };
           });
-          return textResult({ students }, renderOverview(students));
+          return textResult({ students }, renderOverview(students, config.tz));
         }),
       );
 
@@ -209,7 +210,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_assignments',
         {
           title: 'Gradebook assignments',
-          description: 'Assignments for a course with due date, category, score, and status.',
+          description: 'A course\'s assignments for the whole school year, newest first, with due date, category, score, and status. Rows flag new work; a score that changed carries its history.',
           inputSchema: {
             course: courseRef,
             status: assignmentStatusFilter.default('missing'),
@@ -218,10 +219,16 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         },
         withAudit(ctx.logger, ctx.identity, 'gradebook_assignments', ({ course, status }) => {
           const { course: resolved, term, student } = store.resolveCourse(course);
-          const assignments = store.assignments(resolved.id, status);
+          const news = store.whatsNew(student.id).items;
+          const newIds = new Set(news.map((item) => item.assignment.id));
+          const newlyMissingIds = new Set(news.filter((item) => item.kind === 'now_missing').map((item) => item.assignment.id));
+          const assignments = store.assignments(resolved.id, status).map((assignment) => ({
+            ...assignment,
+            new: newIds.has(assignment.id),
+          }));
           return textResult(
             { student, term: termLabel(term), course: resolved, status, assignments },
-            renderAssignments(resolved, assignments, status),
+            renderAssignments(resolved, assignments, status, newlyMissingIds),
           );
         }),
       );
@@ -230,7 +237,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_missing',
         {
           title: 'Missing work',
-          description: 'Consolidated missing/incomplete/late work across all courses — the view ParentVUE lacks. Omit student for all students.',
+          description: 'Consolidated missing/incomplete/late work across all courses — the view ParentVUE lacks; rows flag work that newly went missing. Omit student for all students.',
           inputSchema: {
             student: studentRef.optional(),
           },
@@ -238,9 +245,15 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         },
         withAudit(ctx.logger, ctx.identity, 'gradebook_missing', ({ student }) => {
           const resolved = student === undefined ? undefined : store.resolveStudent(student);
-          const items = store.missing(resolved?.id);
+          const newsByStudent = new Map(
+            (resolved ? [resolved] : store.listStudents()).map((entry) => [entry.id, store.whatsNew(entry.id).items]),
+          );
+          const newlyMissingIds = new Set([...newsByStudent.values()].flat()
+            .filter((item) => item.kind === 'now_missing').map((item) => item.assignment.id));
+          const newIds = new Set([...newsByStudent.values()].flat().map((item) => item.assignment.id));
+          const items = store.missing(resolved?.id).map((item) => ({ ...item, new: newIds.has(item.id) }));
           const scope = resolved ? resolved.name : 'all students';
-          return textResult({ student: resolved ?? null, items }, renderMissing(items, scope));
+          return textResult({ student: resolved ?? null, items }, renderMissing(items, scope, newlyMissingIds));
         }),
       );
 
@@ -248,7 +261,7 @@ export function createGradebookModule(config: Config, logger: Logger): HomeModul
         'gradebook_trend',
         {
           title: 'Grade trend',
-          description: 'Grade history for a course within its term.',
+          description: 'Grade history for a course in its current reporting period.',
           inputSchema: { course: courseRef },
           annotations: { readOnlyHint: true, openWorldHint: false },
         },

@@ -89,7 +89,33 @@ export interface Assignment {
   notes: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
+  scoredAt: string | null;
+  missingAt: string | null;
+  history?: ScorePoint[];
   stale: boolean;
+}
+
+export interface ScorePoint {
+  observedAt: string;
+  score: number | null;
+  scoreRaw: string | null;
+  scoreLetter: string | null;
+  pointsPossible: number | null;
+}
+
+export type ScoreEvent = 'new_score' | 'rescored' | 'cleared';
+
+export interface WhatsNewItem {
+  kind: 'new_assignment' | 'now_missing' | 'new_score' | 'rescored';
+  assignment: Assignment;
+  courseId: string;
+  courseTitle: string;
+}
+
+export interface WhatsNew {
+  at: string | null;
+  since: string | null;
+  items: WhatsNewItem[];
 }
 
 export interface GradePoint {

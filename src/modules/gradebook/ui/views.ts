@@ -1,7 +1,7 @@
 import { html } from '../../../ui/html.js';
 import type { Html } from '../../../ui/html.js';
-import { describeGrade, describeScore, statusLabel, termLabel } from '../logic.js';
-import type { Assignment, Course, MissingAssignment, Student, Term } from '../schema.js';
+import { describeGrade, describeScore, describeScoreTrail, formatTimestamp, statusLabel, termLabel, whatsNewLabel } from '../logic.js';
+import type { Assignment, Course, MissingAssignment, Student, Term, WhatsNew, WhatsNewItem } from '../schema.js';
 
 export interface CourseCardModel {
   course: Course;
@@ -14,6 +14,8 @@ export interface DashboardPageModel {
   terms: Term[];
   activeTerm: Term | null;
   cards: CourseCardModel[];
+  whatsNew: WhatsNew;
+  timeZone?: string;
   missing: MissingAssignment[];
   view: 'courses' | 'missing';
   configured: boolean;
@@ -71,10 +73,30 @@ function renderDate(ymd: string | null): Html {
 function renderScore(a: Assignment): Html {
   const text = describeScore(a);
   const body = text === '—' ? html`<span class="gb-dash">—</span>` : html`<span class="gb-score">${text}</span>`;
+  const trail = a.history
+    ? html`<span class="gb-trail" title="${a.history.map((point) => point.observedAt.slice(0, 10)).join(' → ')}">${describeScoreTrail(a.history)}</span>`
+    : null;
   if (a.score !== null && a.score !== undefined && a.pointsPossible) {
-    return html`${body}<span class="gb-pct">${Math.round((a.score / a.pointsPossible) * 100)}%</span>`;
+    return html`${body}<span class="gb-pct">${Math.round((a.score / a.pointsPossible) * 100)}%</span>${trail}`;
   }
-  return body;
+  return html`${body}${trail}`;
+}
+
+function warningIcon(): Html {
+  return html`<svg class="gb-warning-icon" viewBox="0 0 24 24" role="img" aria-label="Newly missing" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" fill-rule="evenodd" d="M12 2 1 21h22L12 2Zm-1 6h2v7h-2V8Zm0 9h2v2h-2v-2Z"/></svg>`;
+}
+
+function renderWhatsNew(whatsNew: WhatsNew, timeZone?: string): Html | null {
+  if (whatsNew.items.length === 0 || !whatsNew.since) return null;
+  return html`<section class="gb-whats-new gb-panel" aria-label="What's new">
+    <h2>New since <time datetime="${whatsNew.since}">${formatTimestamp(whatsNew.since, timeZone)}</time></h2>
+    <ul>${whatsNew.items.map((item) => html`<li${item.kind === 'now_missing' ? html` data-kind="now_missing"` : null}>
+      <span class="gb-whats-new-title">${item.kind === 'now_missing' ? warningIcon() : null}${item.assignment.title}</span>
+      <span class="gb-whats-new-course">${item.courseTitle}</span>
+      <span class="gb-whats-new-kind">${whatsNewLabel(item.kind, item.assignment.status)}</span>
+      <span class="gb-whats-new-score">${describeScore(item.assignment)}</span>
+    </li>`)}</ul>
+  </section>`;
 }
 
 const STATUS_TONE: Record<string, string> = {
@@ -157,10 +179,16 @@ function renderViewTabs(model: DashboardPageModel): Html | null {
 
 const FLAGGED = new Set(['missing', 'incomplete', 'late']);
 
-function renderAssignmentRow(a: Assignment): Html {
+function newMarker(kind: WhatsNewItem['kind'] | undefined): Html | null {
+  return kind === 'now_missing' ? warningIcon()
+    : kind ? html`<span class="gb-new-dot" aria-hidden="true"></span>` : null;
+}
+
+function renderAssignmentRow(a: Assignment, newKinds: ReadonlyMap<string, WhatsNewItem['kind']>): Html {
   const status = html`<span class="gb-status" data-tone="${STATUS_TONE[a.status] ?? 'flat'}">${statusLabel(a.status)}</span>${a.stale ? html`<span class="gb-stale" title="No longer listed upstream">stale</span>` : null}`;
-  return html`<tr${FLAGGED.has(a.status) ? html` data-flag="true"` : null}>
-    <td class="gb-title-cell">${a.title}</td>
+  const kind = newKinds.get(a.id);
+  return html`<tr${FLAGGED.has(a.status) ? html` data-flag="true"` : null}${kind ? html` data-new="${kind === 'now_missing' ? 'missing' : 'true'}"` : null}>
+    <td class="gb-title-cell">${newMarker(kind)}${a.title}</td>
     <td class="gb-col-due">${renderDate(a.dueDate)}</td>
     <td class="gb-cat gb-col-cat">${a.category ?? html`<span class="gb-dash">—</span>`}</td>
     <td class="gb-num">${renderScore(a)}</td>
@@ -168,7 +196,7 @@ function renderAssignmentRow(a: Assignment): Html {
   </tr>`;
 }
 
-function renderCourseCard(card: CourseCardModel): Html {
+function renderCourseCard(card: CourseCardModel, newKinds: ReadonlyMap<string, WhatsNewItem['kind']>): Html {
   const { course, assignments } = card;
   const missingBadge =
     course.missingCount > 0 ? html`<span class="gb-flag">${course.missingCount} missing</span>` : null;
@@ -196,14 +224,14 @@ function renderCourseCard(card: CourseCardModel): Html {
             <th scope="col" class="gb-num gb-col-score">Score</th>
             <th scope="col" class="gb-col-status">Status</th>
           </tr></thead>
-          <tbody>${assignments.map(renderAssignmentRow)}</tbody>
+          <tbody>${assignments.map((assignment) => renderAssignmentRow(assignment, newKinds))}</tbody>
         </table>
       </div>`
       : html`<p class="gb-empty">No assignments recorded.</p>`}
   </section>`;
 }
 
-function renderMissingTable(missing: MissingAssignment[]): Html {
+function renderMissingTable(missing: MissingAssignment[], newKinds: ReadonlyMap<string, WhatsNewItem['kind']>): Html {
   if (missing.length === 0) {
     return html`<div class="gb-panel"><p class="gb-note">Nothing missing. 🎉</p></div>`;
   }
@@ -218,8 +246,8 @@ function renderMissingTable(missing: MissingAssignment[]): Html {
       </tr></thead>
       <tbody>
         ${missing.map(
-          (a) => html`<tr data-flag="true">
-            <td class="gb-title-cell">${a.title}</td>
+          (a) => html`<tr data-flag="true"${newKinds.has(a.id) ? html` data-new="${newKinds.get(a.id) === 'now_missing' ? 'missing' : 'true'}"` : null}>
+            <td class="gb-title-cell">${newMarker(newKinds.get(a.id))}${a.title}</td>
             <td>${a.courseTitle}</td>
             <td>${a.studentName}</td>
             <td>${renderDate(a.dueDate)}</td>
@@ -232,6 +260,7 @@ function renderMissingTable(missing: MissingAssignment[]): Html {
 }
 
 export function renderDashboardPage(model: DashboardPageModel): Html {
+  const newKinds = new Map(model.whatsNew.items.map((item) => [item.assignment.id, item.kind] as const));
   const heading = model.activeStudent ? `${model.activeStudent.name}'s gradebook` : 'Gradebook';
   // The date range is shown because it is *why* this term is the default: the
   // dashboard opens on whichever period the district says today falls inside.
@@ -263,13 +292,13 @@ export function renderDashboardPage(model: DashboardPageModel): Html {
           ${renderViewTabs(model)}
         </div>
         ${model.view === 'missing'
-          ? renderMissingTable(model.missing)
-          : model.cards.length > 0
-            ? html`<section class="gb-courses" aria-label="Courses">${model.cards.map(renderCourseCard)}</section>`
-            : html`<div class="gb-panel"><p class="gb-note">No courses this term.</p></div>`}
+          ? renderMissingTable(model.missing, newKinds)
+          : html`${renderWhatsNew(model.whatsNew, model.timeZone)}${model.cards.length > 0
+            ? html`<section class="gb-courses" aria-label="Courses">${model.cards.map((card) => renderCourseCard(card, newKinds))}</section>`
+            : html`<div class="gb-panel"><p class="gb-note">No courses this term.</p></div>`}`}
       `}
     <div class="gb-foot">
-      <p>${model.lastSyncAt ? html`Last synced ${model.lastSyncAt}` : 'Never synced.'}</p>
+      <p>${model.lastSyncAt ? html`Last synced <time datetime="${model.lastSyncAt}">${formatTimestamp(model.lastSyncAt, model.timeZone)}</time>` : 'Never synced.'}</p>
       <p>${heading} · read-only snapshot of ParentVUE</p>
     </div>
   </main>`;

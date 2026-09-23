@@ -5,13 +5,16 @@ import type {
   GradePoint,
   MissingAssignment,
   Student,
+  ScorePoint,
   SyncRunSummary,
   Term,
+  WhatsNew,
+  WhatsNewItem,
 } from './schema.js';
 
 const ID_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
 
-export type IdPrefix = 'stu' | 'trm' | 'crs' | 'asn';
+export type IdPrefix = 'stu' | 'trm' | 'crs' | 'mrk' | 'asn';
 
 /** Generate a short copy-friendly id, rejecting bytes that would introduce modulo bias. */
 export function newId(prefix: IdPrefix): string {
@@ -40,6 +43,23 @@ export function schoolYearForDate(ymd: string | undefined, fallback: Date = new 
   return month >= 8 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
 }
 
+/**
+ * Human-friendly timestamp ("Sep 22, 2026, 3:48 PM") in the server's zone, shared
+ * by the dashboard and the MCP text so both read the same. Without a zone, or with
+ * one Intl doesn't recognise, it falls back to the UTC ISO text minus milliseconds
+ * rather than failing the whole render.
+ */
+export function formatTimestamp(iso: string, timeZone?: string): string {
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat('en-US', { timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
+    } catch {
+      // Fall through to UTC text.
+    }
+  }
+  return iso.replace('T', ' ').replace(/\.\d+(?=Z$)/, '');
+}
+
 export function termLabel(term: Term): string {
   return `${term.schoolYear} · ${term.reportingPeriod}`;
 }
@@ -52,7 +72,14 @@ export function describeGrade(course: Pick<Course, 'gradeLetter' | 'gradeScore'>
   return letter || 'no grade posted';
 }
 
-export function describeScore(a: Assignment): string {
+/** Identity of a score for change detection; null when there is no score. */
+export function scoreKey(score: number | null, scoreRaw: string | null): string | null {
+  if (score !== null) return `n:${score}`;
+  const raw = scoreRaw?.trim();
+  return raw ? `r:${raw}` : null;
+}
+
+export function describeScore(a: Pick<Assignment, 'score' | 'scoreRaw' | 'scoreLetter' | 'pointsPossible'>): string {
   if (a.score !== null && a.score !== undefined && a.pointsPossible !== null && a.pointsPossible !== undefined) {
     return `${a.score}/${a.pointsPossible}`;
   }
@@ -60,6 +87,10 @@ export function describeScore(a: Assignment): string {
   if (a.scoreLetter) return a.scoreLetter;
   if (a.scoreRaw) return a.scoreRaw;
   return '—';
+}
+
+export function describeScoreTrail(points: ScorePoint[]): string {
+  return points.map(describeScore).join(' → ');
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -80,27 +111,37 @@ export interface OverviewStudent {
   student: Student;
   term: Term | null;
   courses: Course[];
+  whatsNew: WhatsNew;
 }
 
-export function renderOverview(students: OverviewStudent[]): string {
+export function whatsNewLabel(kind: WhatsNewItem['kind'], status: Assignment['status']): string {
+  return kind === 'new_assignment' ? 'new assignment'
+    : kind === 'now_missing' ? `marked ${statusLabel(status).toLowerCase()}`
+    : kind === 'new_score' ? 'new score' : 'score changed';
+}
+
+export function renderOverview(students: OverviewStudent[], timeZone?: string): string {
   if (students.length === 0) {
     return 'No students on file yet. Run gradebook_sync to pull ParentVUE.';
   }
   const lines: string[] = [];
-  for (const { student, term, courses } of students) {
+  for (const { student, term, courses, whatsNew } of students) {
     lines.push(`## ${student.name} — ${student.school}`);
     if (!term) {
       lines.push('No synced terms yet.');
-      continue;
+    } else {
+      lines.push(`*${termLabel(term)}*`);
+      if (courses.length === 0) lines.push('No courses this term.');
+      for (const course of courses) {
+        const missing = course.missingCount > 0 ? ` · ${course.missingCount} missing` : '';
+        lines.push(`- ${course.title}: ${describeGrade(course)}${missing} (${course.id})`);
+      }
     }
-    lines.push(`*${termLabel(term)}*`);
-    if (courses.length === 0) {
-      lines.push('No courses this term.');
-      continue;
-    }
-    for (const course of courses) {
-      const missing = course.missingCount > 0 ? ` · ${course.missingCount} missing` : '';
-      lines.push(`- ${course.title}: ${describeGrade(course)}${missing} (${course.id})`);
+    if (whatsNew.since && whatsNew.items.length > 0) {
+      lines.push(`What's new since ${formatTimestamp(whatsNew.since, timeZone)}`);
+      for (const item of whatsNew.items) {
+        lines.push(`- ${item.kind === 'now_missing' ? '⚠️ ' : ''}${item.assignment.title} (${item.courseTitle}) · ${whatsNewLabel(item.kind, item.assignment.status)} · ${describeScore(item.assignment)}`);
+      }
     }
   }
   return lines.join('\n');
@@ -132,7 +173,7 @@ export function renderCourses(student: Student, term: Term, courses: Course[]): 
   return lines.join('\n');
 }
 
-export function renderAssignments(course: Course, assignments: Assignment[], filter: string): string {
+export function renderAssignments(course: Course, assignments: (Assignment & { new?: boolean })[], filter: string, newlyMissingIds: ReadonlySet<string> = new Set()): string {
   const lines = [`## ${course.title} — ${filter}`];
   if (assignments.length === 0) {
     lines.push('Nothing here.');
@@ -142,14 +183,16 @@ export function renderAssignments(course: Course, assignments: Assignment[], fil
     const due = a.dueDate ? ` · due ${a.dueDate}` : '';
     const category = a.category ? ` · ${a.category}` : '';
     const stale = a.stale ? ' · (no longer listed upstream)' : '';
+    const trail = a.history ? ` · was ${describeScoreTrail(a.history.slice(0, -1))}` : '';
+    const fresh = a.new ? ' · new' : '';
     lines.push(
-      `- ${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${due}${category}${stale}`,
+      `- ${newlyMissingIds.has(a.id) ? '⚠️ ' : ''}${a.title}: ${describeScore(a)} · ${statusLabel(a.status)}${trail}${due}${category}${stale}${fresh}`,
     );
   }
   return lines.join('\n');
 }
 
-export function renderMissing(items: MissingAssignment[], scope: string): string {
+export function renderMissing(items: (MissingAssignment & { new?: boolean })[], scope: string, newlyMissingIds: ReadonlySet<string> = new Set()): string {
   const lines = [`## Missing work — ${scope}`];
   if (items.length === 0) {
     lines.push('Nothing missing. 🎉');
@@ -158,7 +201,7 @@ export function renderMissing(items: MissingAssignment[], scope: string): string
   for (const a of items) {
     const due = a.dueDate ? ` · due ${a.dueDate}` : ' · no due date';
     lines.push(
-      `- **${a.title}** (${a.courseTitle}, ${a.studentName})${due} · ${a.category ?? 'no category'}`,
+      `- ${newlyMissingIds.has(a.id) ? '⚠️ ' : ''}**${a.title}** (${a.courseTitle}, ${a.studentName})${due} · ${a.category ?? 'no category'}${a.new ? ' · new' : ''}`,
     );
   }
   return lines.join('\n');
@@ -178,7 +221,7 @@ export function renderTrend(course: Course, points: GradePoint[]): string {
 
 export function renderSyncSummary(summary: SyncRunSummary): string {
   const detail = summary.detail as {
-    students?: Array<{ name: string; courses: number; assignments: number; newMissing: number }>;
+    students?: Array<{ name: string; courses: number; assignments: number; newMissing: number; newScores?: number; rescored?: number }>;
     errors?: string[];
     durationMs?: number;
   };
@@ -188,7 +231,7 @@ export function renderSyncSummary(summary: SyncRunSummary): string {
   ];
   for (const s of detail.students ?? []) {
     lines.push(
-      `- ${s.name}: ${s.courses} courses, ${s.assignments} assignments, ${s.newMissing} newly missing`,
+      `- ${s.name}: ${s.courses} courses, ${s.assignments} assignments, ${s.newMissing} newly missing${s.newScores ? `, ${s.newScores} new scores` : ''}${s.rescored ? `, ${s.rescored} rescored` : ''}`,
     );
   }
   for (const e of detail.errors ?? []) {

@@ -30,7 +30,7 @@ describe('gradebook scheduler visibility', () => {
     return {
       port: 0,
       host: '127.0.0.1',
-      ui: { port: undefined, host: '127.0.0.1' },
+      ui: { port: undefined, host: '127.0.0.1', allowWildcardBind: false },
       nodeEnv: 'test',
       logLevel: 'silent',
       tz: 'America/Los_Angeles',

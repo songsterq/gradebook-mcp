@@ -3,6 +3,8 @@ import { ParentVueClient, ParentVueError, parseStudentInfo } from '../../lib/par
 import type {
   AssignmentSnapshot,
   Child,
+  CourseMark,
+  CourseSnapshot,
   GradebookSnapshot,
   StudentInfo,
 } from '../../lib/parentvue/src/index.js';
@@ -89,6 +91,8 @@ export interface StudentSyncResult {
   courses: number;
   assignments: number;
   newMissing: number;
+  newScores: number;
+  rescored: number;
   staleMarked: number;
 }
 
@@ -133,7 +137,7 @@ export function diffIntoStore(
   // stamps on each mark (and sends as `reportPeriod`). It is NOT the array
   // position: districts are free to number periods however they like, and
   // keying on position silently files a mark under the wrong quarter.
-  const termIds = new Map<number, string>();
+  const termsByPeriod = new Map<number, { id: string; schoolYear: string }>();
   for (const period of gradebook.reportingPeriods) {
     const schoolYear = schoolYearForDate(period.startDate, new Date(`${todayYmd}T00:00:00Z`));
     const { id } = store.upsertTerm(
@@ -147,64 +151,90 @@ export function diffIntoStore(
       },
       nowIso,
     );
-    termIds.set(period.index, id);
+    termsByPeriod.set(period.index, { id, schoolYear });
   }
 
+  const termForMark = (mark: CourseMark): { id: string; schoolYear: string } => {
+    const existing = termsByPeriod.get(mark.periodIndex);
+    if (existing) return existing;
+    // Defensive: a mark the period list didn't cover gets its own term rather
+    // than being dropped.
+    const schoolYear = schoolYearForDate(undefined, new Date(`${todayYmd}T00:00:00Z`));
+    const reportingPeriod = mark.reportingPeriod?.name ?? `Period ${mark.periodIndex + 1}`;
+    const id = store.upsertTerm(
+      { studentId, schoolYear, reportingPeriod, periodIndex: mark.periodIndex },
+      nowIso,
+    ).id;
+    const term = { id, schoolYear };
+    termsByPeriod.set(mark.periodIndex, term);
+    return term;
+  };
+
   let courses = 0;
-  let assignments = 0;
+  // Distinct rows, not listings: a cumulative period repeats its quarter's work.
+  const assignmentIds = new Set<string>();
+  const newScoreIds = new Set<string>();
+  const rescoredIds = new Set<string>();
   let newMissing = 0;
   let staleMarked = 0;
   const completePeriods = new Set(gradebook.completePeriodIndexes ?? []);
   const seenCoursesByTerm = new Map<string, Set<string>>();
+  const seenByTerm = new Map<string, Set<string>>();
   for (const periodIndex of completePeriods) {
-    const termId = termIds.get(periodIndex);
-    if (termId) seenCoursesByTerm.set(termId, new Set());
+    const termId = termsByPeriod.get(periodIndex)?.id;
+    if (termId) {
+      seenCoursesByTerm.set(termId, new Set());
+      seenByTerm.set(termId, new Set());
+    }
   }
 
+  const courseGroups = new Map<string, CourseSnapshot[]>();
   for (const course of gradebook.courses) {
-    for (const mark of course.marks) {
-      let termId = termIds.get(mark.periodIndex);
-      if (!termId) {
-        // Defensive: a mark the period list didn't cover gets its own term
-        // rather than being dropped.
-        const schoolYear = schoolYearForDate(undefined, new Date(`${todayYmd}T00:00:00Z`));
-        const reportingPeriod = mark.reportingPeriod?.name ?? `Period ${mark.periodIndex + 1}`;
-        termId = store.upsertTerm(
-          { studentId, schoolYear, reportingPeriod, periodIndex: mark.periodIndex },
-          nowIso,
-        ).id;
-        termIds.set(mark.periodIndex, termId);
-      }
-      const upserted = store.upsertCourse(
-        {
-          termId,
-          title: course.title,
-          teacher: course.teacher,
-          room: course.room,
-          period: course.period,
-          gradeLetter: mark.letter,
-          gradeScore: mark.score,
-        },
+    const group = courseGroups.get(course.title) ?? [];
+    group.push(course);
+    courseGroups.set(course.title, group);
+  }
+
+  for (const [title, snapshots] of courseGroups) {
+    const marks = snapshots.flatMap((course) => course.marks);
+    const firstMark = marks[0];
+    if (!firstMark) continue;
+    const schoolYear = termForMark(firstMark).schoolYear;
+    const metadata = snapshots.at(-1)!;
+    const { id: courseId } = store.upsertCourse(
+      {
+        studentId,
+        schoolYear,
+        title,
+        teacher: metadata.teacher,
+        room: metadata.room,
+        period: metadata.period,
+      },
+      nowIso,
+    );
+    courses += 1;
+
+    for (const mark of marks) {
+      const { id: termId } = termForMark(mark);
+      const upsertedMark = store.upsertCourseMark(
+        { courseId, termId, gradeLetter: mark.letter, gradeScore: mark.score },
         nowIso,
       );
-      seenCoursesByTerm.get(termId)?.add(course.title);
-      if (upserted.gradeChanged) {
+      seenCoursesByTerm.get(termId)?.add(courseId);
+      if (upsertedMark.gradeChanged) {
         store.appendGradeHistory(
-          upserted.id,
+          upsertedMark.id,
           nowIso,
-          upserted.gradeChanged.after.letter,
-          upserted.gradeChanged.after.score,
+          upsertedMark.gradeChanged.after.letter,
+          upsertedMark.gradeChanged.after.score,
         );
       }
-      courses += 1;
 
-      const seen = new Set<string>();
       for (const a of mark.assignments) {
-        const extKey = a.id !== '' ? a.id : fallbackExtKey(course.title, a.title, a.dueDate ?? null);
-        seen.add(extKey);
+        const extKey = a.id !== '' ? a.id : fallbackExtKey(title, a.title, a.dueDate ?? null);
         const result = store.upsertAssignment(
           {
-            courseId: upserted.id,
+            courseId,
             extKey,
             title: a.title,
             category: a.category,
@@ -218,19 +248,25 @@ export function diffIntoStore(
           },
           nowIso,
         );
-        assignments += 1;
+        seenByTerm.get(termId)?.add(result.id);
+        assignmentIds.add(result.id);
+        if (result.scoreEvent === 'new_score') newScoreIds.add(result.id);
+        if (result.scoreEvent === 'rescored') rescoredIds.add(result.id);
         if (result.becameActionable) newMissing += 1;
       }
-      staleMarked += store.markStaleAssignments(upserted.id, seen);
-      store.recomputeMissingCount(upserted.id);
     }
   }
 
-  for (const [termId, seenTitles] of seenCoursesByTerm) {
-    staleMarked += store.markStaleCourses(termId, seenTitles);
+  for (const periodIndex of completePeriods) {
+    const termId = termsByPeriod.get(periodIndex)?.id;
+    if (!termId) continue;
+    store.replaceTermMemberships(termId, studentId, seenByTerm.get(termId) ?? new Set());
+    store.markStaleCourseMarks(termId, seenCoursesByTerm.get(termId) ?? new Set());
   }
+  staleMarked += store.sweepStale(studentId);
+  store.recomputeMissingCounts(studentId);
 
-  return { studentId, name: child.name, courses, assignments, newMissing, staleMarked };
+  return { studentId, name: child.name, courses, assignments: assignmentIds.size, newMissing, newScores: newScoreIds.size, rescored: rescoredIds.size, staleMarked };
 }
 
 /**
@@ -302,6 +338,8 @@ export async function runSync(options: RunSyncOptions): Promise<{
         courses: s.courses,
         assignments: s.assignments,
         newMissing: s.newMissing,
+        newScores: s.newScores,
+        rescored: s.rescored,
       })),
       errors,
       durationMs,

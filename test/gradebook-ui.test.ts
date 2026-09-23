@@ -77,8 +77,10 @@ describe('gradebook dashboard term default', () => {
       },
       NOW,
     ).id;
-    store.upsertCourse({ termId: q1, title: 'Science Now', gradeLetter: 'A', gradeScore: 3.8 }, NOW);
-    store.upsertCourse({ termId: sem2, title: 'Science Later' }, NOW);
+    const current = store.upsertCourse({ studentId: sid, schoolYear: '2026-2027', title: 'Science Now' }, NOW);
+    const future = store.upsertCourse({ studentId: sid, schoolYear: '2026-2027', title: 'Science Later' }, NOW);
+    store.upsertCourseMark({ courseId: current.id, termId: q1, gradeLetter: 'A', gradeScore: 3.8 }, NOW);
+    store.upsertCourseMark({ courseId: future.id, termId: sem2 }, NOW);
     return { q1, sem2 };
   }
 
@@ -100,5 +102,43 @@ describe('gradebook dashboard term default', () => {
 
     expect(page).toContain('aria-current="page">Semester 2 Final</span>');
     expect(page).toContain('Science Later');
+  });
+
+  it('shows the assignments listed by the selected reporting period', async () => {
+    const { id: sid } = store.upsertStudent(
+      { parentvueId: '1', name: 'Aiden Chien', school: 'Odle' },
+      NOW,
+    );
+    const q1 = store.upsertTerm({
+      studentId: sid,
+      schoolYear: '2026-2027',
+      reportingPeriod: 'Quarter 1',
+      periodIndex: 0,
+      periodStart: '2026-09-02',
+      periodEnd: '2026-11-06',
+    }, NOW).id;
+    const s1 = store.upsertTerm({
+      studentId: sid,
+      schoolYear: '2026-2027',
+      reportingPeriod: 'Semester 1 Final',
+      periodIndex: 1,
+      periodStart: '2026-11-09',
+      periodEnd: '2027-01-28',
+    }, NOW).id;
+    const course = store.upsertCourse({ studentId: sid, schoolYear: '2026-2027', title: 'Science' }, NOW);
+    store.upsertCourseMark({ courseId: course.id, termId: q1, gradeLetter: 'B' }, NOW);
+    store.upsertCourseMark({ courseId: course.id, termId: s1, gradeLetter: 'A' }, NOW);
+    const q1Work = store.upsertAssignment({ courseId: course.id, extKey: 'q1', title: 'Quarter Work', status: 'scored' }, NOW);
+    const s1Work = store.upsertAssignment({ courseId: course.id, extKey: 's1', title: 'Semester Work', status: 'scored' }, NOW);
+    store.replaceTermMemberships(q1, sid, new Set([q1Work.id]));
+    store.replaceTermMemberships(s1, sid, new Set([s1Work.id]));
+    store.sweepStale(sid);
+
+    const q1Page = await (await fetch(`${baseUrl}/gradebook?term=${q1}`)).text();
+    const s1Page = await (await fetch(`${baseUrl}/gradebook?term=${s1}`)).text();
+    expect(q1Page).toContain('Quarter Work');
+    expect(q1Page).not.toContain('Semester Work');
+    expect(s1Page).toContain('Semester Work');
+    expect(s1Page).not.toContain('Quarter Work');
   });
 });
