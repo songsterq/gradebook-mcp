@@ -1,6 +1,10 @@
 services:
   gradebook-mcp:
-    build: .
+    # The published image. Set GRADEBOOK_VERSION in .env to pin a release
+    # (for example 0.2 for fixes only, or 0.2.0 exactly); `docker compose pull`
+    # then fetches updates within that pin. To build from a checkout instead,
+    # add compose.build.yaml (see README, "Local development").
+    image: ghcr.io/songsterq/gradebook-mcp:${GRADEBOOK_VERSION:-latest}
     container_name: gradebook-mcp
     restart: unless-stopped
     env_file: .env

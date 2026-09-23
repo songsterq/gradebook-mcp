@@ -1,0 +1,11 @@
+# Build the image from this checkout instead of pulling the published one.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+#
+# The local build is tagged gradebook-mcp:dev rather than the published name,
+# so it never shadows a pulled release.
+services:
+  gradebook-mcp:
+    image: gradebook-mcp:dev
+    build: .

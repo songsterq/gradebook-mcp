@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import express, { type Express } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -8,7 +9,12 @@ import { createAuthMiddleware } from './auth/middleware.js';
 import type { HomeModule } from './modules/types.js';
 
 const SERVER_NAME = 'gradebook-mcp';
-const SERVER_VERSION = '0.1.0';
+// Read from package.json, the version a release tag is checked against, so the
+// version MCP clients see always matches the published image. The file sits one
+// level above both src/ (dev) and dist/ (the image copies it to /app).
+const SERVER_VERSION = (
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+).version;
 
 const METHOD_NOT_ALLOWED_BODY = {
   jsonrpc: '2.0' as const,

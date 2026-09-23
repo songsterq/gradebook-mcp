@@ -15,14 +15,15 @@
 #
 # Usage: scripts/backup.sh [--verbose]
 # Env:   CONTAINER   container name            (default: gradebook-mcp)
-#        BACKUP_DIR  destination directory     (default: <repo>/backups)
+#        BACKUP_DIR  destination directory     (default: ./backups)
 #        KEEP_DAYS   prune backups older than  (default: 14)
 
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-gradebook-mcp}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/backups}"
+# Relative to where it runs, not where the script lives: it is also used as a
+# standalone download next to compose.yaml, outside any checkout.
+BACKUP_DIR="${BACKUP_DIR:-$PWD/backups}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
 DATABASES=(gradebook)
 

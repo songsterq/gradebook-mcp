@@ -7,7 +7,7 @@
 # list instead of extending it (Compose v2.24+).
 #
 # Usage:
-#   docker compose -f compose.yaml -f compose.dashboard-only.yaml up -d --build
+#   docker compose -f compose.yaml -f compose.dashboard-only.yaml up -d
 services:
   gradebook-mcp:
     ports: !override
