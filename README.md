@@ -163,7 +163,10 @@ provides the required protection.
 
 Syncs merge ParentVUE data into `gradebook.sqlite`. They do not write back to
 the district. Assignments that disappear upstream are marked stale instead of
-deleted, and course-grade changes are retained as history.
+deleted, and course-grade and assignment-score changes are retained as history.
+Each student's overview carries a "What's new" summary — new assignments, score
+changes, and work that newly went missing — that stays in place until a later
+sync brings something newer.
 
 Every MCP call is audit-logged with the resolved identity, tool, arguments,
 duration, and outcome. Sync runs also record their trigger and result. The
