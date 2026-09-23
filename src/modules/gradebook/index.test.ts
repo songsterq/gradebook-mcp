@@ -11,7 +11,7 @@ import { MIGRATIONS } from './migrations.js';
 import { GradebookStore } from './store.js';
 
 it('includes whatsNew in overview JSON and new on assignment rows', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'home-mcp-gradebook-new-'));
+  const dir = mkdtempSync(join(tmpdir(), 'gradebook-mcp-new-'));
   const dbPath = join(dir, 'gradebook.sqlite');
   const db = openDatabase(dbPath);
   migrate(db, MIGRATIONS);
@@ -30,15 +30,13 @@ it('includes whatsNew in overview JSON and new on assignment rows', async () => 
   const config: Config = {
     port: 0,
     host: '127.0.0.1',
-    ui: { port: undefined, host: '127.0.0.1' },
+    ui: { port: undefined, host: '127.0.0.1', allowWildcardBind: false },
     nodeEnv: 'test',
     logLevel: 'silent',
     tz: 'America/Los_Angeles',
     dataDir: dir,
-    modules: ['gradebook'],
+    mcpBearerToken: undefined,
     access: { teamDomain: undefined, aud: undefined, allowedEmails: [], allowedServiceTokens: [] },
-    chores: { baseUrl: undefined },
-    lists: { dbPath: join(dir, 'lists.sqlite') },
     gradebook: { dbPath, parentvueUser: undefined, parentvuePass: undefined, syncEnabled: false,
       syncIntervalHours: 24, students: [], parentvueHost: 'example.invalid' },
     devInsecureNoAuth: true,
@@ -68,7 +66,7 @@ it('includes whatsNew in overview JSON and new on assignment rows', async () => 
 });
 
 it('flags newly missing work in all three tool outputs', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'home-mcp-gradebook-missing-'));
+  const dir = mkdtempSync(join(tmpdir(), 'gradebook-mcp-missing-'));
   const dbPath = join(dir, 'gradebook.sqlite');
   const db = openDatabase(dbPath);
   migrate(db, MIGRATIONS);
@@ -88,11 +86,10 @@ it('flags newly missing work in all three tool outputs', async () => {
   db.close();
 
   const config: Config = {
-    port: 0, host: '127.0.0.1', ui: { port: undefined, host: '127.0.0.1' },
+    port: 0, host: '127.0.0.1', ui: { port: undefined, host: '127.0.0.1', allowWildcardBind: false },
     nodeEnv: 'test', logLevel: 'silent', tz: 'America/Los_Angeles', dataDir: dir,
-    modules: ['gradebook'],
+    mcpBearerToken: undefined,
     access: { teamDomain: undefined, aud: undefined, allowedEmails: [], allowedServiceTokens: [] },
-    chores: { baseUrl: undefined }, lists: { dbPath: join(dir, 'lists.sqlite') },
     gradebook: { dbPath, parentvueUser: undefined, parentvuePass: undefined, syncEnabled: false,
       syncIntervalHours: 24, students: [], parentvueHost: 'example.invalid' },
     devInsecureNoAuth: true,

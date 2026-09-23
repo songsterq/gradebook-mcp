@@ -267,7 +267,7 @@ function pointsFromScoreType(scoreType: string | undefined): number | undefined 
 }
 
 /**
- * Points possible, from whichever upstream field actually carries it. Bellevue
+ * Points possible, from whichever upstream field actually carries it. One district
  * posts rubric-scored work with `pointPossible` null and `points` empty while
  * still showing "3.5 out of 4" in the app, so `displayScore` and the rubric
  * range in `scoreType` are real sources, not guesses. A non-positive value is
