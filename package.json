@@ -1,6 +1,6 @@
 {
   "name": "gradebook-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "packageManager": "pnpm@12.3.4",
   "description": "ParentVUE gradebook MCP server and dashboard: a local, read-only snapshot of your kids' grades and missing work",

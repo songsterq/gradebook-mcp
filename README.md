@@ -20,7 +20,15 @@ off until you explicitly enable it.
 
 ## Quick start
 
-Requirements: Docker with Compose and a ParentVUE parent account.
+Requirements: Docker with Compose and a ParentVUE parent account. The image is
+published for `linux/amd64` and `linux/arm64`, so no checkout or build is
+needed. In an empty directory, download the Compose file and the settings
+template:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/songsterq/gradebook-mcp/main/compose.yaml
+curl -fsSL -o .env https://raw.githubusercontent.com/songsterq/gradebook-mcp/main/.env.example
+```
 
 Choose the interfaces you want to run:
 
@@ -28,10 +36,6 @@ Choose the interfaces you want to run:
   authentication is needed.
 - **MCP only:** set `PORT` and configure one MCP authentication mode.
 - **Both:** set both ports and configure MCP authentication.
-
-```sh
-cp .env.example .env
-```
 
 To run both interfaces, generate a token with `openssl rand -hex 32`, then edit
 `.env` and set:
@@ -51,7 +55,7 @@ UI_PORT=3001
 Start the service:
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 curl http://127.0.0.1:3000/healthz
 ```
 
@@ -67,7 +71,8 @@ If you do not need MCP, leave `PORT` and all MCP authentication settings blank,
 set `UI_PORT=3001`, and run (requires Compose v2.24 or newer):
 
 ```sh
-docker compose -f compose.yaml -f compose.dashboard-only.yaml up -d --build
+curl -fsSLO https://raw.githubusercontent.com/songsterq/gradebook-mcp/main/compose.dashboard-only.yaml
+docker compose -f compose.yaml -f compose.dashboard-only.yaml up -d
 ```
 
 The dashboard is unauthenticated. Keep it on a trusted LAN, VPN, or private
@@ -173,13 +178,29 @@ duration, and outcome. Sync runs also record their trigger and result. The
 dashboard limits new sync attempts to one per minute to reduce the risk of a
 ParentVUE account lockout.
 
+## Upgrading
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+`GRADEBOOK_VERSION` in `.env` controls what `pull` fetches: blank follows the
+latest release, `0.2` takes only fixes to that line, and `0.2.0` stays put.
+Database migrations run automatically on startup and cannot be undone, so take
+a backup first. Release notes are on the
+[GitHub Releases](https://github.com/songsterq/gradebook-mcp/releases) page.
+
 ## Backup and restore
 
 The database uses SQLite WAL mode, so do not back up only the `.sqlite` file
-while the service is running. Use the included consistent-backup script:
+while the service is running. Use the consistent-backup script from
+[`scripts/backup.sh`](scripts/backup.sh):
 
 ```sh
-BACKUP_DIR=/path/to/backups KEEP_DAYS=14 scripts/backup.sh
+curl -fsSLO https://raw.githubusercontent.com/songsterq/gradebook-mcp/main/scripts/backup.sh
+chmod +x backup.sh
+BACKUP_DIR=/path/to/backups KEEP_DAYS=14 ./backup.sh
 ```
 
 It creates and verifies a snapshot through the running container and removes
@@ -230,6 +251,12 @@ DEV_INSECURE_NO_AUTH=true
 
 The bypass works only outside production on a loopback address.
 
+To run the container from your checkout instead of the published image:
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
 ```sh
 pnpm build
 pnpm test
@@ -237,6 +264,20 @@ pnpm test
 
 The ParentVUE client is a zero-dependency package in
 [`src/lib/parentvue`](src/lib/parentvue) with its own documentation and tests.
+
+## Releasing
+
+1. Set `version` in `package.json` and merge that to `main`.
+2. Tag the merge and push the tag:
+
+   ```sh
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+The release workflow runs CI, checks the tag against `package.json`, publishes
+`ghcr.io/songsterq/gradebook-mcp` for amd64 and arm64 (tags `0.2.0`, `0.2`,
+and `latest`), and creates a GitHub Release with generated notes.
 
 ## License
 
